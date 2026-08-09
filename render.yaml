@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: zenecite
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app --bind 0.0.0.0:$PORT --workers 2"
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: FLASK_DEBUG
+        value: "false"
+      - key: FORCE_HTTPS
+        value: "true"
+      - key: PYTHON_VERSION
+        value: "3.11.0"
