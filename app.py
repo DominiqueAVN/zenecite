@@ -740,7 +740,24 @@ def api_preview_pdf():
     respuesta.headers["X-Content-Type-Options"] = "nosniff"
     respuesta.headers["Cache-Control"] = "private, max-age=300"
     return respuesta
+@app.route("/api/verificar-citas", methods=["POST"])
+@limiter.limit("20 per minute")
+def api_verificar_citas():
+    texto = request.form.get("cita", "").strip()
+    if not texto or len(texto) > 20000:
+        return jsonify({"error": "texto_invalido"}), 400
+    resultados = [verificar(l.strip()) for l in texto.split("\n") if l.strip()]
+    return jsonify({"resultados": resultados})
 
+@app.route("/api/analizar-extracto", methods=["POST"])
+@limiter.limit("20 per minute")
+def api_analizar_extracto():
+    extracto = request.form.get("extracto", "").strip()
+    if not extracto or len(extracto) > 20000:
+        return jsonify({"error": "texto_invalido"}), 400
+    tema = extraer_palabras_clave(extracto) or extracto
+    sugerencias = buscar_por_tema(tema)
+    return jsonify({"sugerencias": sugerencias})
 
 @app.route("/")
 def splash():
@@ -1598,11 +1615,12 @@ PLANTILLA = r"""
             <div class="tab-content {% if tab_activa == 'verificar' %}active{% endif %}" id="tab-verificar">
                 <div class="seccion glass">
                     <h2><span class="icon icon-check" aria-hidden="true"></span> {{ t.seccion1_titulo }}</h2>
-                    <form method="POST">
-                        <label for="cita-textarea" class="sr-only">{{ t.placeholder_cita }}</label>
-                        <textarea id="cita-textarea" name="cita" rows="6" placeholder="{{ t.placeholder_cita }}"></textarea>
-                        <button type="submit" class="accion" name="accion" value="verificar">{{ t.boton_verificar }}</button>
-                    </form>
+                    <form id="form-verificar">
+    <label for="cita-textarea" class="sr-only">{{ t.placeholder_cita }}</label>
+    <textarea id="cita-textarea" name="cita" rows="6" placeholder="{{ t.placeholder_cita }}"></textarea>
+    <button type="submit" class="accion">{{ t.boton_verificar }}</button>
+</form>
+<div id="resultados-verificar" class="grid-resultados" aria-live="polite"></div>
                     {% if resultados and tab_activa == 'verificar' %}
                         <div class="grid-resultados">
                         {% for resultado in resultados %}
@@ -1630,11 +1648,12 @@ PLANTILLA = r"""
                         <span class="icon icon-alert icon-lg" aria-hidden="true"></span>
                         <span><strong>¿Usaste IA para tu tarea?</strong> Las IA suelen inventar citas bibliográficas. Pega tu lista aquí para auditarla antes de entregar.</span>
                     </div>
-                    <form method="POST">
-                        <label for="bibliography-textarea" class="sr-only">Pega aquí tu bibliografía</label>
-                        <textarea id="bibliography-textarea" name="bibliography" rows="10" placeholder="Pega aquí toda tu lista de referencias, una por línea..."></textarea>
-                        <button type="submit" class="accion" name="accion" value="scan_bibliography">{{ t.boton_scan }}</button>
-                    </form>
+                    <form id="form-scan">
+    <label for="bibliography-textarea" class="sr-only">Pega aquí tu bibliografía</label>
+    <textarea id="bibliography-textarea" name="bibliography" rows="10" placeholder="Pega aquí toda tu lista de referencias, una por línea..."></textarea>
+    <button type="submit" class="accion">{{ t.boton_scan }}</button>
+</form>
+<div id="resultados-scan" class="grid-resultados" aria-live="polite"></div>
                     {% if resultados and tab_activa == 'scan' %}
                         <div class="grid-resultados">
                         {% for resultado in resultados %}
@@ -1715,11 +1734,12 @@ PLANTILLA = r"""
             <div class="tab-content {% if tab_activa == 'extracto' %}active{% endif %}" id="tab-extracto">
                 <div class="seccion glass">
                     <h2><span class="icon icon-doc-mini" aria-hidden="true"></span> {{ t.seccion3_titulo }}</h2>
-                    <form method="POST">
-                        <label for="extracto-textarea" class="sr-only">{{ t.placeholder_extracto }}</label>
-                        <textarea id="extracto-textarea" name="extracto" rows="6" placeholder="{{ t.placeholder_extracto }}"></textarea>
-                        <button type="submit" class="accion" name="accion" value="analizar_extracto">{{ t.boton_extracto }}</button>
-                    </form>
+                    <form id="form-extracto">
+    <label for="extracto-textarea" class="sr-only">{{ t.placeholder_extracto }}</label>
+    <textarea id="extracto-textarea" name="extracto" rows="6" placeholder="{{ t.placeholder_extracto }}"></textarea>
+    <button type="submit" class="accion">{{ t.boton_extracto }}</button>
+</form>
+<div id="resultados-extracto" class="grid-resultados" aria-live="polite"></div>
                     {% if sugerencias_extracto %}
                         <div class="grid-resultados">
                         {% for paper in sugerencias_extracto %}
@@ -1809,6 +1829,14 @@ PLANTILLA = r"""
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnaWZ5Z3lub3ZwcmJwc2tvbWtsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3NjE0NTcsImV4cCI6MjEwMjMzNzQ1N30.LmIdeV7N43FBI3Og8ul2VE4pe2NYQTiw8U6l3YhnoSc'
     )
     : null;
+
+    function escaparHtml(texto) {
+    if (!texto) return '';
+    var div = document.createElement('div');
+    div.textContent = texto;
+    return div.innerHTML;
+}
+
     // ===== ICONOS SVG con aria-hidden =====
     function iconoSvg(nombre) {
         return '<span class="icon icon-' + nombre + '" aria-hidden="true"></span>';
@@ -2559,6 +2587,77 @@ PLANTILLA = r"""
             btn.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100) + '%');
         });
     });
+// ===== VERIFICAR CITAS (AJAX) =====
+function crearTarjetaVerificacion(r) {
+    var div = document.createElement('div');
+    div.className = 'tarjeta ' + (r.mensaje.indexOf('SI exista') !== -1 ? 'si-existe' : 'no-existe');
+    var h = '<p><strong>Cita:</strong> ' + escaparHtml(r.original) + '</p>';
+    if (r.cita_corregida) {
+        h += '<p><strong>Sugerencia:</strong> ' + escaparHtml(r.cita_corregida) + '</p>';
+        h += '<button type="button" class="accion corregir-btn" data-original="' + encodeURIComponent(r.original) + '" data-corregida="' + encodeURIComponent(r.cita_corregida) + '" style="background:var(--warning); padding:6px 18px; font-size:14px;">{{ t.usar_correccion }}</button>';
+    }
+    h += '<p><strong>Título:</strong> <a href="https://doi.org/' + encodeURIComponent(r.doi) + '" target="_blank" class="titulo-clickable">' + escaparHtml(r.titulo) + '</a></p>';
+    h += '<p><strong>DOI:</strong> ' + escaparHtml(r.doi) + ' · <strong>Similitud:</strong> ' + escaparHtml(r.similitud) + '</p>';
+    h += '<p>' + escaparHtml(r.mensaje) + '</p>';
+    div.innerHTML = h;
+    return div;
+}
+
+document.getElementById('form-verificar').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var cita = document.getElementById('cita-textarea').value;
+    var cont = document.getElementById('resultados-verificar');
+    cont.innerHTML = '';
+    fetch('/api/verificar-citas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'cita=' + encodeURIComponent(cita)
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+          (data.resultados || []).forEach(function(res) { cont.appendChild(crearTarjetaVerificacion(res)); });
+      }).catch(function() { mostrarToast('Error al verificar. Intenta de nuevo.', 'error'); });
+});
+// ===== ESCANEAR BIBLIOGRAFÍA (AJAX) =====
+document.getElementById('form-scan').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var biblio = document.getElementById('bibliography-textarea').value;
+    var cont = document.getElementById('resultados-scan');
+    cont.innerHTML = '';
+    fetch('/api/verificar-citas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'cita=' + encodeURIComponent(biblio)
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+          (data.resultados || []).forEach(function(res) { cont.appendChild(crearTarjetaVerificacion(res)); });
+      }).catch(function() { mostrarToast('Error al escanear. Intenta de nuevo.', 'error'); });
+});
+// ===== ANALIZAR EXTRACTO (AJAX) =====
+document.getElementById('form-extracto').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var extracto = document.getElementById('extracto-textarea').value;
+    var cont = document.getElementById('resultados-extracto');
+    cont.innerHTML = '';
+    fetch('/api/analizar-extracto', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'extracto=' + encodeURIComponent(extracto)
+    }).then(function(r) { return r.json(); })
+      .then(function(data) {
+          (data.sugerencias || []).forEach(function(p) {
+              var div = document.createElement('div');
+              div.className = 'tarjeta';
+              div.innerHTML = '<span class="badge-fuente">' + (p.fuente || 'CrossRef') + '</span>' +
+                  (p.region ? '<span class="badge-region">' + p.region + '</span>' : '') +
+                  '<p><strong><a href="' + escaparHtml(p.enlace) + '" target="_blank" class="titulo-clickable">' + escaparHtml(p.titulo) + '</a></strong></p>' +
+                  '<p>' + escaparHtml(p.autores) + ' (' + escaparHtml(String(p.año)) + ')</p>' +
+                  '<div class="enlaces-paper"><a class="enlace-web" href="' + escaparHtml(p.enlace) + '" target="_blank">{{ t.papel_pagina_web }}</a>' +
+                  (p.pdf_gratis ? '<a class="enlace-pdf" href="' + escaparHtml(p.pdf_gratis) + '" target="_blank"><span class="icon icon-download" aria-hidden="true"></span> {{ t.papel_pdf }}</a>' : '') +
+                  '</div>';
+              cont.appendChild(div);
+          });
+      }).catch(function() { mostrarToast('Error al analizar. Intenta de nuevo.', 'error'); });
+});
 // ===== MALLA GEOMÉTRICA DE FONDO =====
 (function() {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -2708,6 +2807,6 @@ actualizarContadorMonedas();
 """
 
 if __name__ == "__main__":
-    if os.environ.get("RENDER") or os.environ.get("VERCEL"):
+    if os.environ.get("RENDER"):
         CONFIG["modo_debug"] = False
     app.run(host="0.0.0.0", port=CONFIG["puerto"], debug=CONFIG["modo_debug"])
