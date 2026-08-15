@@ -727,6 +727,9 @@ def api_preview_pdf():
     respuesta.headers["X-Content-Type-Options"] = "nosniff"
     respuesta.headers["Cache-Control"] = "private, max-age=300"
     return respuesta
+@app.route("/")
+def splash():
+    return render_template_string(SPLASH_ZENECITE, csp_nonce=g.csp_nonce)
 @app.route("/api/verificar-citas", methods=["POST"])
 @limiter.limit("20 per minute")
 def api_verificar_citas():
@@ -1075,6 +1078,24 @@ PLANTILLA = r"""
 @keyframes respirarOrbe {
     0%, 100% { transform: scale(1); opacity: 0.7; }
     50% { transform: scale(1.15); opacity: 1; }
+}
+@keyframes apareceGiro {
+    0% { transform: scale(0.3) rotate(-30deg); opacity: 0; }
+    60% { transform: scale(1.15) rotate(8deg); opacity: 1; }
+    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+#animal-desbloqueo-svg svg { width: 100%; height: 100%; animation: apareceGiro .7s cubic-bezier(.2,1.4,.4,1); filter: drop-shadow(0 0 30px currentColor); }
+.particula-dorada {
+    position: absolute; width: 6px; height: 6px; border-radius: 50%;
+    background: radial-gradient(circle, #F5B942, transparent);
+    animation: subirParticula 2.5s ease-out forwards;
+}
+@keyframes subirParticula {
+    0% { transform: translateY(0) scale(1); opacity: 1; }
+    100% { transform: translateY(-350px) scale(0); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    #animal-desbloqueo-svg svg, .particula-dorada { animation: none !important; }
 }
 
         /* Foco visible SOLO con teclado */
@@ -1479,8 +1500,7 @@ PLANTILLA = r"""
                 <span class="brand-text">ZENECITE</span>
             </div>
             <div id="monedas-display" style="display:flex; align-items:center; gap:8px; padding:10px 15px; margin-bottom:15px; background:rgba(245,185,66,0.1); border:1px solid rgba(245,185,66,0.25); border-radius:10px; color:#F5B942; font-weight:700;">
-                <span aria-hidden="true">🪙</span> <span id="contador-monedas">0</span> monedas
-            </div>
+<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#F5B942"/><circle cx="12" cy="12" r="7" fill="none" stroke="#b45309" stroke-width="1.5"/></svg> <span id="contador-monedas">0</span> monedas            </div>
             <div id="cuenta-display" style="padding:0 15px 15px;"></div>
             <nav class="sidebar-nav" aria-label="Navegación principal">
                 <button type="button" class="nav-boton" id="nav-verificar" data-tab="verificar"><span class="icon icon-check" aria-hidden="true"></span> {{ t.nav_verificar }}</button>
@@ -1664,19 +1684,31 @@ PLANTILLA = r"""
                 </div>
             </div>
 
-            <div class="tab-content" id="tab-constructor">
+        <div class="tab-content" id="tab-constructor">
     <div class="seccion glass">
         <h2><span class="icon icon-grid" aria-hidden="true"></span> El Camello del Sahara</h2>
-        <p>Arma la cita en el orden correcto para guiar al camello por el desierto hasta el oasis.</p>
+        <p>Arma la cita en el orden correcto antes de que se acabe el tiempo — cuidado con el sol.</p>
 
         <div id="escena-desierto" style="position:relative; height:220px; border-radius:16px; overflow:hidden; margin:20px 0; background:linear-gradient(180deg, #1a2a3a 0%, #2b3f52 40%, #d9a86c 40%, #c99456 100%);">
+            <div id="sol-desierto" aria-hidden="true" style="position:absolute; top:15px; right:15%; width:40px; height:40px; border-radius:50%; background:radial-gradient(circle,#fde68a,#f59e0b); box-shadow:0 0 30px #f59e0b; transition: background .4s, box-shadow .4s;"></div>
             <div id="camino-huellas" style="position:absolute; bottom:35px; left:5%; right:15%; height:4px; background:repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0 6px, transparent 6px 18px); border-radius:2px;"></div>
-            <div id="camello-sprite" style="position:absolute; bottom:38px; left:5%; font-size:42px; transition: left 0.6s ease; filter:drop-shadow(0 4px 6px rgba(0,0,0,0.4));" role="img" aria-label="Camello avanzando por el desierto">🐪</div>
-            <div id="oasis-sprite" style="position:absolute; bottom:20px; right:6%; font-size:44px;" aria-hidden="true">🌴💧</div>
+            <div id="camello-sprite-wrap" style="position:absolute; bottom:30px; left:5%; width:64px; height:64px; transition: left 0.5s cubic-bezier(.4,0,.2,1);">
+                <div id="camello-sprite" style="width:100%; height:100%;"></div>
+            </div>
+            <div id="oasis-sprite" style="position:absolute; bottom:15px; right:6%; width:54px; height:54px;" aria-hidden="true"></div>
             <div class="sr-only" id="progreso-camello" role="status" aria-live="polite"></div>
         </div>
 
-        <p class="puntaje" style="font-size: 1.2rem; color: var(--primary-color);">{{ t.texto_puntaje }}: <span id="puntaje-constructor">0 / 0</span></p>
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; flex-wrap:wrap; gap:12px;">
+            <div id="vidas-display" style="display:flex; gap:4px;" aria-label="Vidas restantes"></div>
+            <div style="flex:1; min-width:180px; max-width:280px;">
+                <div style="height:10px; background:rgba(255,255,255,0.08); border-radius:6px; overflow:hidden;">
+                    <div id="barra-tiempo" style="height:100%; width:100%; background:linear-gradient(90deg,#F5B942,#ef4444); transition: width .1s linear;"></div>
+                </div>
+            </div>
+            <div id="nivel-display" style="font-weight:700; color:var(--primary-color);"></div>
+        </div>
+
         <p><strong>{{ t.constructor_pool }}</strong></p>
         <div id="piezas-pool" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--border-light); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(0,0,0,0.2);" role="group" aria-label="Piezas disponibles"></div>
         <p><strong>{{ t.constructor_zona }}</strong></p>
@@ -1687,9 +1719,9 @@ PLANTILLA = r"""
 
         <div id="bonus-camello" style="display:none; margin-top:25px; padding:20px; border-radius:14px; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3);">
             <div style="display:flex; gap:14px; align-items:flex-start;">
-                <span style="font-size:36px;" aria-hidden="true">🐪</span>
+                <div id="bonus-camello-icono" style="width:36px; height:36px; flex-shrink:0;" aria-hidden="true"></div>
                 <div>
-                    <p style="margin:0 0 6px 0; font-weight:700; color:var(--primary-color);">El camello encontró algo en tu bibliografía...</p>
+                    <p style="margin:0 0 6px 0; font-weight:700; color:var(--primary-color);">Tu guía encontró algo en tu bibliografía...</p>
                     <div id="bonus-camello-texto" style="color:var(--text-main); line-height:1.6;"></div>
                 </div>
             </div>
@@ -2339,30 +2371,6 @@ PLANTILLA = r"""
         return c;
     }
 
-    function cargarCitaJuego(i) {
-    citaActual = i;
-    respuestaUsuario = [];
-    piezasDisponibles = barajar(citasJuego[i].piezas);
-    dibujarJuego();
-    document.getElementById('resultado-constructor').innerHTML = '';
-    document.getElementById('bonus-camello').style.display = 'none';
-    document.getElementById('camello-sprite').textContent = obtenerAnimalActivo();
-    moverCamello(0);
-}
-    function moverCamello(pasosCompletados) {
-    var sprite = document.getElementById('camello-sprite');
-    var totalPiezas = citasJuego[citaActual].piezas.length;
-    var porcentaje = Math.min(pasosCompletados / totalPiezas, 1);
-    var posicionMin = 5, posicionMax = 78;
-    var izquierda = posicionMin + (posicionMax - posicionMin) * porcentaje;
-    sprite.style.left = izquierda + '%';
-
-    var anuncio = document.getElementById('progreso-camello');
-    if (anuncio) {
-        anuncio.textContent = 'El camello avanzó ' + pasosCompletados + ' de ' + totalPiezas + ' tramos hacia el oasis.';
-    }
-}
-
     function siguienteCitaJuego() { cargarCitaJuego((citaActual + 1) % citasJuego.length); }
 
     function dibujarJuego() {
@@ -2394,41 +2402,6 @@ PLANTILLA = r"""
             zona.appendChild(b);
         });
     }
-
-    function verificarConstructor() {
-    var c = citasJuego[citaActual].piezas;
-    var a = 0;
-    var h = '<p><strong>Resultado:</strong></p><p style="line-height:2;">';
-    for (var i = 0; i < c.length; i++) {
-        var ok = respuestaUsuario[i] === c[i];
-        if (ok) a++;
-        h += '<span style="display:inline-block; margin:2px; padding:4px 8px; border-radius:4px; color:' + (ok ? '#0B1120' : '#fff') + '; background:' + (ok ? 'var(--primary-color)' : 'var(--danger)') + '; font-weight:bold;">' + (respuestaUsuario[i] || '___') + '</span> ';
-    }
-    h += '</p>';
-
-    moverCamello(a);
-
-    var tot = parseInt(localStorage.getItem('constructorTotal') || '0');
-    var aci = parseInt(localStorage.getItem('constructorAciertos') || '0');
-    localStorage.setItem('constructorTotal', tot + 1);
-
-    if (a === c.length) {
-        localStorage.setItem('constructorAciertos', aci + 1);
-        sumarMonedas(15);
-        h += '<p style="color:var(--primary-color); font-weight:bold; font-size:1.1rem;">🐪💧 ¡Llegaste al oasis! Cita 100% correcta.</p>';
-        h += '<p style="color:#F5B942; font-weight:700;">🪙 +15 monedas</p>';
-        mostrarToast('¡Llegaste al oasis! +15 monedas', 'success');
-        setTimeout(mostrarBonusCamello, 700);
-    } else {
-        if (a > 0) {
-            sumarMonedas(a * 2);
-            h += '<p style="color:#F5B942;">🪙 +' + (a * 2) + ' monedas por tu esfuerzo</p>';
-        }
-        h += '<p style="color:var(--text-muted);">' + a + ' / ' + c.length + ' correctas — sigue intentando.</p>';
-    }
-    document.getElementById('resultado-constructor').innerHTML = h;
-    document.getElementById('puntaje-constructor').textContent = localStorage.getItem('constructorAciertos') + ' / ' + localStorage.getItem('constructorTotal');
-}
 
     document.getElementById('btnVerificarConstructor').addEventListener('click', verificarConstructor);
     document.getElementById('btnSiguienteConstructor').addEventListener('click', siguienteCitaJuego);
@@ -2651,11 +2624,7 @@ function actualizarContadorMonedas() {
     if (el) el.textContent = obtenerMonedas();
 }
 function obtenerAnimalesComprados() { return JSON.parse(localStorage.getItem('userAnimales') || '[]'); }
-function obtenerAnimalActivo() {
-    var id = localStorage.getItem('animalActivo');
-    var animal = CATALOGO_ANIMALES.find(function(a) { return a.id === id; });
-    return animal ? animal.emoji : '🐪';
-}
+
 function comprarAnimal(id) {
     var animal = CATALOGO_ANIMALES.find(function(a) { return a.id === id; });
     if (!animal) return;
@@ -2665,8 +2634,7 @@ function comprarAnimal(id) {
     sumarMonedas(-animal.costo);
     comprados.push(id);
     localStorage.setItem('userAnimales', JSON.stringify(comprados));
-    mostrarToast('¡Adoptaste a ' + animal.nombre + '!', 'success');
-    renderizarTienda();
+mostrarDesbloqueoEpico(animal);    renderizarTienda();
     guardarEnNube();
 }
 function usarAnimal(id) {
@@ -2706,7 +2674,198 @@ document.addEventListener('click', function(e) {
     var btnUsar = e.target.closest ? e.target.closest('.usar-animal-btn') : null;
     if (btnUsar) usarAnimal(btnUsar.getAttribute('data-id'));
 });
+var ARTE_CAMELLO = '<svg viewBox="0 0 100 70" xmlns="http://www.w3.org/2000/svg" style="color:#3d2817;"><path d="M15 60 L22 30 Q28 15 38 26 Q45 14 53 26 L60 60 Z" fill="currentColor"/><path d="M10 60 L5 38 L16 30 L20 60 Z" fill="currentColor" opacity="0.85"/><circle cx="4" cy="34" r="6" fill="currentColor"/><ellipse cx="70" cy="60" rx="6" ry="4" fill="#1a1207" opacity="0.6"/><ellipse cx="45" cy="62" rx="6" ry="4" fill="#1a1207" opacity="0.6"/><path d="M15 60 L22 30 Q28 15 38 26 Q45 14 53 26 L60 60 Z" fill="none" stroke="#f5f0e8" stroke-width="1.5"/></svg>';
+var ARTE_OASIS = '<svg viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"><path d="M20 40 Q10 10 25 5 Q22 25 30 30" fill="#16a34a"/><path d="M20 40 Q30 8 15 5 Q22 25 15 32" fill="#22c55e"/><rect x="17" y="38" width="6" height="18" fill="#92400e"/><ellipse cx="45" cy="45" rx="10" ry="6" fill="#3B82F6" opacity="0.85"/></svg>';
+var ICONO_CORAZON = '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="{color}" d="M12 21s-6.5-4.35-9-8.28C1.4 9.87 2 6 5.4 4.9 7.6 4.2 9.9 5 12 7.5c2.1-2.5 4.4-3.3 6.6-2.6C22 6 22.6 9.87 21 12.72 18.5 16.65 12 21 12 21z"/></svg>';
 
+document.getElementById('oasis-sprite').innerHTML = ARTE_OASIS;
+
+var VIDAS_MAX = 3;
+var vidasActuales = VIDAS_MAX;
+var NIVEL_ACTUAL = 1;
+var TIEMPO_POR_RONDA = 25;
+var timerInterval = null;
+var tiempoRestante = TIEMPO_POR_RONDA;
+
+function obtenerAnimalActivo() {
+    return ARTE_ANIMALES[localStorage.getItem('animalActivo')] || ARTE_CAMELLO;
+}
+
+function actualizarVidasDisplay() {
+    var el = document.getElementById('vidas-display');
+    var html = '';
+    for (var i = 0; i < VIDAS_MAX; i++) {
+        html += ICONO_CORAZON.replace('{color}', i < vidasActuales ? '#ef4444' : '#334155');
+    }
+    el.innerHTML = html;
+}
+function esRondaJefe() { return NIVEL_ACTUAL % 5 === 0; }
+function actualizarNivelDisplay() {
+    document.getElementById('nivel-display').textContent = (esRondaJefe() ? 'JEFE — ' : '') + 'Nivel ' + NIVEL_ACTUAL;
+}
+
+function iniciarTemporizador() {
+    clearInterval(timerInterval);
+    var base = esRondaJefe() ? 15 : 25;
+    tiempoRestante = Math.max(8, base - Math.floor((NIVEL_ACTUAL - 1) / 2));
+    var tiempoTotal = tiempoRestante;
+    document.getElementById('barra-tiempo').style.width = '100%';
+    var sol = document.getElementById('sol-desierto');
+    if (esRondaJefe()) {
+        sol.style.background = 'radial-gradient(circle,#fca5a5,#dc2626)';
+        sol.style.boxShadow = '0 0 40px #dc2626';
+    } else {
+        sol.style.background = 'radial-gradient(circle,#fde68a,#f59e0b)';
+        sol.style.boxShadow = '0 0 30px #f59e0b';
+    }
+    timerInterval = setInterval(function() {
+        tiempoRestante -= 0.1;
+        var pct = Math.max(0, (tiempoRestante / tiempoTotal) * 100);
+        document.getElementById('barra-tiempo').style.width = pct + '%';
+        if (tiempoRestante <= 0) {
+            clearInterval(timerInterval);
+            perderVida('¡El sol alcanzó al camello!');
+        }
+    }, 100);
+}
+
+function perderVida(motivo) {
+    vidasActuales--;
+    actualizarVidasDisplay();
+    var wrap = document.getElementById('camello-sprite-wrap');
+    wrap.style.transition = 'transform .15s';
+    wrap.style.transform = 'translateX(-8px)';
+    setTimeout(function() { wrap.style.transform = 'translateX(0)'; }, 150);
+    mostrarToast(motivo, 'error');
+    if (vidasActuales <= 0) {
+        gameOver();
+    } else {
+        respuestaUsuario = [];
+        piezasDisponibles = barajar(citasJuego[citaActual].piezas);
+        dibujarJuego();
+        moverCamello(0);
+        iniciarTemporizador();
+    }
+}
+
+function gameOver() {
+    clearInterval(timerInterval);
+    document.getElementById('resultado-constructor').innerHTML =
+        '<p style="color:var(--danger); font-weight:700; font-size:1.2rem;">Sin vidas. Tu guía necesita descansar — reintentando...</p>';
+    setTimeout(function() {
+        vidasActuales = VIDAS_MAX;
+        actualizarVidasDisplay();
+        cargarCitaJuego(citaActual);
+    }, 2200);
+}
+
+function cargarCitaJuego(i) {
+    citaActual = i;
+    respuestaUsuario = [];
+    piezasDisponibles = barajar(citasJuego[i].piezas);
+    dibujarJuego();
+    document.getElementById('resultado-constructor').innerHTML = '';
+    document.getElementById('bonus-camello').style.display = 'none';
+    document.getElementById('camello-sprite').innerHTML = obtenerAnimalActivo();
+    actualizarVidasDisplay();
+    actualizarNivelDisplay();
+    moverCamello(0);
+    iniciarTemporizador();
+}
+
+function moverCamello(pasosCompletados) {
+    var wrap = document.getElementById('camello-sprite-wrap');
+    var totalPiezas = citasJuego[citaActual].piezas.length;
+    var porcentaje = Math.max(0, Math.min(pasosCompletados / totalPiezas, 1));
+    var posicionMin = 5, posicionMax = 78;
+    wrap.style.left = (posicionMin + (posicionMax - posicionMin) * porcentaje) + '%';
+    document.getElementById('progreso-camello').textContent =
+        'Avanzó ' + pasosCompletados + ' de ' + totalPiezas + ' tramos.';
+}
+
+function siguienteCitaJuego() { cargarCitaJuego((citaActual + 1) % citasJuego.length); }
+
+function verificarConstructor() {
+    var c = citasJuego[citaActual].piezas;
+    var a = 0;
+    for (var i = 0; i < c.length; i++) { if (respuestaUsuario[i] === c[i]) a++; }
+
+    if (a === c.length) {
+        clearInterval(timerInterval);
+        moverCamello(a);
+        localStorage.setItem('constructorAciertos', (parseInt(localStorage.getItem('constructorAciertos') || '0')) + 1);
+        localStorage.setItem('constructorTotal', (parseInt(localStorage.getItem('constructorTotal') || '0')) + 1);
+        var recompensa = 15 + NIVEL_ACTUAL * 3;
+        sumarMonedas(recompensa);
+        document.getElementById('resultado-constructor').innerHTML =
+            '<p style="color:var(--primary-color); font-weight:bold; font-size:1.1rem;">¡Llegaste al oasis! +' + recompensa + ' monedas</p>';
+        mostrarToast('¡Nivel superado!', 'success');
+        NIVEL_ACTUAL++;
+        setTimeout(function() {
+            mostrarBonusCamello();
+            setTimeout(function() { siguienteCitaJuego(); }, 2500);
+        }, 700);
+    } else if (a > 0) {
+        moverCamello(a);
+        sumarMonedas(a * 2);
+        mostrarToast(a + '/' + c.length + ' correctas — sigue intentando', 'warning');
+        respuestaUsuario = [];
+        piezasDisponibles = barajar(citasJuego[citaActual].piezas);
+        dibujarJuego();
+    } else {
+        perderVida('Orden incorrecto — retrocede');
+    }
+}
+
+function generarDatoCurioso(paper) {
+    if (paper.abstract) {
+        return paper.abstract.length > 280 ? paper.abstract.slice(0, 280) + '…' : paper.abstract;
+    }
+    var claves = (paper.titulo || '').split(/\s+/).filter(function(w) { return w.length > 4; }).slice(0, 4);
+    if (!claves.length) return 'No hay resumen disponible, pero fue publicado en ' + (paper.año || 's.f.') + '.';
+    return 'Probablemente explora ideas sobre ' + claves.join(', ') + ', publicado en ' + (paper.año || 's.f.') + '.';
+}
+
+function mostrarBonusCamello() {
+    var refs = JSON.parse(localStorage.getItem('userBiblio') || '[]');
+    var panel = document.getElementById('bonus-camello');
+    var texto = document.getElementById('bonus-camello-texto');
+    document.getElementById('bonus-camello-icono').innerHTML = obtenerAnimalActivo();
+    if (!refs.length) {
+        texto.textContent = 'Aún no guardaste ninguna referencia. Guarda una desde "Buscar fuentes".';
+        panel.style.display = 'block';
+        return;
+    }
+    var elegido = refs[Math.floor(Math.random() * refs.length)];
+    texto.textContent = generarDatoCurioso(elegido);
+    panel.style.display = 'block';
+}
+
+function mostrarDesbloqueoEpico(animal) {
+    document.getElementById('animal-desbloqueo-svg').innerHTML = ARTE_ANIMALES[animal.id] || '';
+    document.getElementById('animal-desbloqueo-svg').style.color = animal.color;
+    document.getElementById('nombre-animal-desbloqueo').textContent = animal.nombre;
+    var rareza = document.getElementById('rareza-animal-desbloqueo');
+    rareza.textContent = animal.rareza.toUpperCase();
+    rareza.style.color = animal.color;
+    var contenedorRayos = document.getElementById('rayos-desbloqueo');
+    contenedorRayos.innerHTML = '';
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        for (var i = 0; i < 25; i++) {
+            var p = document.createElement('div');
+            p.className = 'particula-dorada';
+            p.style.left = (40 + Math.random() * 20) + '%';
+            p.style.top = '55%';
+            p.style.animationDelay = (Math.random() * 0.8) + 's';
+            contenedorRayos.appendChild(p);
+        }
+    }
+    document.getElementById('overlay-desbloqueo').style.display = 'flex';
+    document.getElementById('btnCerrarDesbloqueo').focus();
+}
+document.getElementById('btnCerrarDesbloqueo').addEventListener('click', function() {
+    document.getElementById('overlay-desbloqueo').style.display = 'none';
+});
 var sesionActual = null;
 async function inicializarSesion() {
     var res = await supabaseClient.auth.getSession();
@@ -2755,6 +2914,14 @@ inicializarSesion();
 
 actualizarContadorMonedas();
     </script>
+<div id="overlay-desbloqueo" style="display:none; position:fixed; inset:0; z-index:5000; background:rgba(5,10,20,0.92); backdrop-filter:blur(6px); align-items:center; justify-content:center; flex-direction:column; text-align:center;" role="dialog" aria-modal="true" aria-label="Animal desbloqueado">
+    <div id="rayos-desbloqueo" aria-hidden="true" style="position:absolute; inset:0; overflow:hidden; pointer-events:none;"></div>
+    <div id="animal-desbloqueo-svg" style="width:220px; height:220px; margin-bottom:20px; position:relative; z-index:2;"></div>
+    <p style="color:#F5B942; font-size:1.4rem; font-weight:800; letter-spacing:2px; margin-bottom:6px; position:relative; z-index:2;">¡LO CONSEGUISTE!</p>
+    <p id="nombre-animal-desbloqueo" style="color:#fff; font-size:1.8rem; font-weight:800; margin-bottom:8px; position:relative; z-index:2;"></p>
+    <p id="rareza-animal-desbloqueo" style="font-size:1rem; font-weight:700; margin-bottom:30px; position:relative; z-index:2;"></p>
+    <button type="button" id="btnCerrarDesbloqueo" class="accion" style="position:relative; z-index:2;">Continuar</button>
+</div>
 </body>
 </html>
 """
