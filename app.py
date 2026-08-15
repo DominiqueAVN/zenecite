@@ -148,7 +148,6 @@ def obtener_pais_por_ip():
             "UY": "es", "CR": "es", "PA": "es", "DO": "es", "GT": "es",
             "HN": "es", "SV": "es", "NI": "es", "CU": "es", "PR": "es",
             "US": "en", "GB": "en", "CA": "en", "AU": "en", "NZ": "en", "IE": "en",
-            "CN": "zh", "TW": "zh", "HK": "zh",
         }
         return mapa.get(country_code, "es")
     except Exception:
@@ -746,10 +745,6 @@ def api_analizar_extracto():
     tema = extraer_palabras_clave(extracto) or extracto
     sugerencias = buscar_por_tema(tema)
     return jsonify({"sugerencias": sugerencias})
-
-@app.route("/login")
-def login():
-    return render_template_string(LOGIN_TEMPLATE, csp_nonce=g.csp_nonce)
 
 @app.route("/login")
 def login():
@@ -1478,9 +1473,9 @@ PLANTILLA = r"""
     <div class="layout-wrapper">
         <aside class="sidebar">
             <div class="brand">
-                <span class="brand-icon-wrap">
-                  <img src="/static/logo-zenecite.svg" alt="" aria-hidden="true" width="28" height="28" style="display:block; filter: drop-shadow(0 0 6px rgba(16,185,129,0.5));">
-                </span>
+                <span class="brand-icon-wrap" style="width:42px; height:42px; border-radius:50%; background:radial-gradient(circle, rgba(16,185,129,0.18), transparent 70%); display:flex; align-items:center; justify-content:center;">
+  <img src="/static/logo-zenecite.svg" alt="" aria-hidden="true" width="36" height="36" style="display:block; filter: drop-shadow(0 0 8px rgba(16,185,129,0.7)) brightness(1.3);">
+</span>
                 <span class="brand-text">ZENECITE</span>
             </div>
             <div id="monedas-display" style="display:flex; align-items:center; gap:8px; padding:10px 15px; margin-bottom:15px; background:rgba(245,185,66,0.1); border:1px solid rgba(245,185,66,0.25); border-radius:10px; color:#F5B942; font-weight:700;">
@@ -1500,7 +1495,6 @@ PLANTILLA = r"""
                 <div class="lang-switch">
                     <a href="?idioma=es" aria-label="Cambiar a español">ES</a>
                     <a href="?idioma=en" aria-label="Switch to English">EN</a>
-                    <a href="?idioma=zh" aria-label="切换到中文">中文</a>
                 </div>
             </div>
         </aside>
@@ -2712,6 +2706,53 @@ document.addEventListener('click', function(e) {
     var btnUsar = e.target.closest ? e.target.closest('.usar-animal-btn') : null;
     if (btnUsar) usarAnimal(btnUsar.getAttribute('data-id'));
 });
+
+var sesionActual = null;
+async function inicializarSesion() {
+    var res = await supabaseClient.auth.getSession();
+    sesionActual = res.data.session;
+    actualizarUIcuenta();
+    if (sesionActual) await sincronizarDesdeNube();
+}
+function actualizarUIcuenta() {
+    var el = document.getElementById('cuenta-display');
+    if (!el) return;
+    if (sesionActual) {
+        el.innerHTML = '<div style="padding:10px 15px; font-size:0.85rem; color:var(--primary-color);">' + sesionActual.user.email + '</div>' +
+            '<button type="button" id="btn-cerrar-sesion" style="margin:0 15px; background:transparent; border:1px solid var(--border-light); color:var(--text-muted); padding:4px 10px; border-radius:6px; font-size:0.8rem; cursor:pointer;">Salir</button>';
+        document.getElementById('btn-cerrar-sesion').addEventListener('click', function() {
+            supabaseClient.auth.signOut().then(function() { window.location.reload(); });
+        });
+    } else {
+        el.innerHTML = '<a href="/login" style="display:block; padding:10px 15px; color:var(--primary-color); font-weight:700; text-decoration:none; font-size:0.9rem;">Iniciar sesión →</a>';
+    }
+}
+async function sincronizarDesdeNube() {
+    var uid = sesionActual.user.id;
+    var res = await supabaseClient.from('perfil_juego').select('*').eq('user_id', uid).maybeSingle();
+    if (res.error) { console.error(res.error); return; }
+    if (!res.data) {
+        await supabaseClient.from('perfil_juego').insert({
+            user_id: uid, monedas: obtenerMonedas(),
+            animales: obtenerAnimalesComprados(), animal_activo: localStorage.getItem('animalActivo') || null
+        });
+        return;
+    }
+    localStorage.setItem('userCoins', res.data.monedas || 0);
+    localStorage.setItem('userAnimales', JSON.stringify(res.data.animales || []));
+    if (res.data.animal_activo) localStorage.setItem('animalActivo', res.data.animal_activo);
+    actualizarContadorMonedas();
+}
+async function guardarEnNube() {
+    if (!sesionActual) return;
+    await supabaseClient.from('perfil_juego').update({
+        monedas: obtenerMonedas(), animales: obtenerAnimalesComprados(),
+        animal_activo: localStorage.getItem('animalActivo') || null,
+        actualizado_en: new Date().toISOString()
+    }).eq('user_id', sesionActual.user.id);
+}
+inicializarSesion();
+
 actualizarContadorMonedas();
     </script>
 </body>
