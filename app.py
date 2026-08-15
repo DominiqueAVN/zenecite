@@ -747,9 +747,13 @@ def api_analizar_extracto():
     sugerencias = buscar_por_tema(tema)
     return jsonify({"sugerencias": sugerencias})
 
-@app.route("/")
-def splash():
-    return render_template_string(SPLASH_ZENECITE, csp_nonce=g.csp_nonce)
+@app.route("/login")
+def login():
+    return render_template_string(LOGIN_TEMPLATE, csp_nonce=g.csp_nonce)
+
+@app.route("/login")
+def login():
+    return render_template_string(LOGIN_TEMPLATE, csp_nonce=g.csp_nonce)
 
 @app.route("/app", methods=["GET", "POST"])
 @limiter.limit("30 per minute")
@@ -918,7 +922,7 @@ SPLASH_ZENECITE = r"""
         <li><a href="/app?idioma=es">Verificador</a></li>
         <li><a href="/app#tab-tienda">Tienda</a></li>
     </ul>
-    <a href="/app" class="nav-cta">Entrar al Verificador</a>
+    <a href="/login" class="nav-cta">Entrar / Registrarme</a>
 </nav>
 
 <main id="main-content">
@@ -1479,6 +1483,10 @@ PLANTILLA = r"""
                 </span>
                 <span class="brand-text">ZENECITE</span>
             </div>
+            <div id="monedas-display" style="display:flex; align-items:center; gap:8px; padding:10px 15px; margin-bottom:15px; background:rgba(245,185,66,0.1); border:1px solid rgba(245,185,66,0.25); border-radius:10px; color:#F5B942; font-weight:700;">
+                <span aria-hidden="true">🪙</span> <span id="contador-monedas">0</span> monedas
+            </div>
+            <div id="cuenta-display" style="padding:0 15px 15px;"></div>
             <nav class="sidebar-nav" aria-label="Navegación principal">
                 <button type="button" class="nav-boton" id="nav-verificar" data-tab="verificar"><span class="icon icon-check" aria-hidden="true"></span> {{ t.nav_verificar }}</button>
                 <button type="button" class="nav-boton" id="nav-scan" data-tab="scan"><span class="icon icon-bolt" aria-hidden="true"></span> {{ t.nav_scan }}</button>
@@ -2642,6 +2650,7 @@ function obtenerMonedas() { return parseInt(localStorage.getItem('userCoins') ||
 function sumarMonedas(cant) {
     localStorage.setItem('userCoins', Math.max(0, obtenerMonedas() + cant));
     actualizarContadorMonedas();
+    guardarEnNube();
 }
 function actualizarContadorMonedas() {
     var el = document.getElementById('contador-monedas');
@@ -2664,6 +2673,7 @@ function comprarAnimal(id) {
     localStorage.setItem('userAnimales', JSON.stringify(comprados));
     mostrarToast('¡Adoptaste a ' + animal.nombre + '!', 'success');
     renderizarTienda();
+    guardarEnNube();
 }
 function usarAnimal(id) {
     localStorage.setItem('animalActivo', id);
@@ -2704,6 +2714,234 @@ document.addEventListener('click', function(e) {
 });
 actualizarContadorMonedas();
     </script>
+</body>
+</html>
+"""
+LOGIN_TEMPLATE = r"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ingresar — ZENECITE</title>
+<style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+        background:#0B1120; min-height:100vh; display:flex;
+        font-family:'Segoe UI',sans-serif; color:#e2e8f0;
+    }
+    .panel-visual {
+        flex:1; position:relative; display:flex; align-items:center; justify-content:center;
+        background:linear-gradient(160deg,#0d1626,#0B1120);
+        overflow:hidden; min-width:320px;
+    }
+    #svg-login-visual { width:70%; max-width:420px; position:relative; z-index:2; }
+    #svg-login-visual svg { width:100%; height:100%; animation: flotarSuave 6s ease-in-out infinite; }
+    @keyframes flotarSuave {
+        0%, 100% { transform: translateY(0) rotate(0deg); }
+        50% { transform: translateY(-14px) rotate(1.5deg); }
+    }
+    .panel-formulario {
+        flex:1; display:flex; align-items:center; justify-content:center; padding:40px; min-width:320px;
+    }
+    .caja-login {
+        background:rgba(20,30,45,0.75); backdrop-filter:blur(16px);
+        border:1px solid rgba(255,255,255,0.08); border-radius:16px;
+        padding:40px; width:100%; max-width:400px;
+    }
+    .caja-login h1 { font-size:1.6rem; margin-bottom:6px; color:#fff; }
+    .caja-login p.subt { color:#94a3b8; margin-bottom:28px; font-size:0.92rem; }
+    label { display:block; margin-bottom:6px; font-weight:600; font-size:0.9rem; }
+    input[type="email"], input[type="password"] {
+        width:100%; padding:12px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.1);
+        background:rgba(0,0,0,0.3); color:#fff; margin-bottom:16px; font-size:15px;
+    }
+    input:focus-visible { outline:3px solid #34D399; outline-offset:1px; }
+    button.btn-login {
+        width:100%; padding:13px; border:none; border-radius:8px; background:#10B981;
+        color:#0B1120; font-weight:700; font-size:15px; cursor:pointer; margin-bottom:10px;
+        transition: background .2s;
+    }
+    button.btn-login:hover { background:#34D399; }
+    button.btn-login:focus-visible { outline:3px solid #34D399; outline-offset:2px; }
+    .btn-secundario {
+        width:100%; padding:13px; border-radius:8px; background:transparent;
+        border:1px solid rgba(255,255,255,0.15); color:#e2e8f0; font-weight:600; cursor:pointer;
+    }
+    #mensaje-login { text-align:center; margin-top:16px; font-size:0.9rem; min-height:20px; }
+    #mensaje-login.error { color:#EF4444; }
+    #mensaje-login.exito { color:#34D399; }
+    .link-volver { display:block; text-align:center; margin-top:20px; color:#94a3b8; text-decoration:none; font-size:0.88rem; }
+    .link-volver:hover { color:#10B981; }
+    @media (prefers-reduced-motion: reduce) {
+        #svg-login-visual svg { animation:none !important; }
+    }
+    @media (max-width: 900px) {
+        .panel-visual { display:none; }
+    }
+</style>
+</head>
+<body>
+<div class="panel-visual">
+    <div id="svg-login-visual" aria-hidden="true">
+        <svg viewBox="0 0 200 160" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="ff1" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#1a3444"/>
+                    <stop offset="100%" stop-color="#0e2028"/>
+                </linearGradient>
+                <radialGradient id="gg" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#F5B942" stop-opacity="1"/>
+                    <stop offset="100%" stop-color="#F5B942" stop-opacity="0"/>
+                </radialGradient>
+                <radialGradient id="gc" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#34D8D8" stop-opacity="1"/>
+                    <stop offset="100%" stop-color="#34D8D8" stop-opacity="0"/>
+                </radialGradient>
+            </defs>
+            <g stroke="#10B981" stroke-width="0.6" stroke-linejoin="round">
+                <polygon points="70,120 95,70 120,80 110,125" fill="url(#ff1)"/>
+                <polygon points="95,70 120,80 130,55 105,45" fill="#1e4356"/>
+                <polygon points="120,80 110,125 145,130 150,90" fill="#163342"/>
+                <polygon points="130,55 105,45 115,20 145,25" fill="#255064"/>
+                <polygon points="150,90 145,130 175,120 170,80" fill="#0e2028"/>
+                <polygon points="145,25 115,20 130,5 160,10" fill="#2c5c72"/>
+                <polygon points="170,80 145,25 160,10 185,45" fill="#1e4356"/>
+                <polygon points="70,120 60,140 85,145 95,70" fill="#163342"/>
+                <polygon points="60,140 40,138 55,110 70,120" fill="#0e2028"/>
+                <polygon points="55,110 40,138 25,120 45,95" fill="#1e4356"/>
+                <polygon points="45,95 25,120 15,95 35,80" fill="#163342"/>
+                <polygon points="35,80 15,95 20,72 40,68" fill="#255064"/>
+                <polygon points="40,68 20,72 30,52 48,55" fill="#1e4356"/>
+            </g>
+            <circle cx="150" cy="90" r="10" fill="url(#gg)"/><circle cx="150" cy="90" r="2.5" fill="#F5B942"/>
+            <circle cx="35" cy="80" r="8" fill="url(#gc)"/><circle cx="35" cy="80" r="2" fill="#34D8D8"/>
+            <circle cx="115" cy="20" r="6" fill="url(#gg)"/><circle cx="115" cy="20" r="1.6" fill="#F5B942"/>
+            <circle cx="20" cy="72" r="6" fill="url(#gc)"/><circle cx="20" cy="72" r="1.6" fill="#34D8D8"/>
+        </svg>
+    </div>
+</div>
+
+<div class="panel-formulario">
+    <main class="caja-login">
+        <h1>Bienvenido de vuelta</h1>
+        <p class="subt">Guarda tu bibliografía y tu progreso en el desierto</p>
+
+        <form id="form-login">
+            <label for="email-login">Correo</label>
+            <input type="email" id="email-login" required autocomplete="email">
+            <label for="pass-login">Contraseña</label>
+            <input type="password" id="pass-login" required autocomplete="current-password" minlength="6">
+            <button type="submit" class="btn-login">Ingresar</button>
+        </form>
+        <button type="button" class="btn-secundario" id="btn-registrar">Crear cuenta nueva</button>
+
+        <div id="mensaje-login" role="status" aria-live="polite"></div>
+        <a href="/app" class="link-volver">Continuar sin cuenta →</a>
+    </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" nonce="{{ csp_nonce }}"></script>
+<script nonce="{{ csp_nonce }}">
+    var supabaseClient = supabase.createClient(
+        'https://sgifygynovprbpskomkl.supabase.co',
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnaWZ5Z3lub3ZwcmJwc2tvbWtsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3NjE0NTcsImV4cCI6MjEwMjMzNzQ1N30.LmIdeV7N43FBI3Og8ul2VE4pe2NYQTiw8U6l3YhnoSc'
+    );
+    var sesionActual = null;
+
+async function inicializarSesion() {
+    if (!supabaseClient) return;
+    var res = await supabaseClient.auth.getSession();
+    sesionActual = res.data.session;
+    actualizarUIcuenta();
+    if (sesionActual) await sincronizarDesdeNube();
+}
+
+function actualizarUIcuenta() {
+    var el = document.getElementById('cuenta-display');
+    if (!el) return;
+    if (sesionActual) {
+        el.innerHTML = '<span style="color:var(--primary-color); font-size:0.85rem;">' + sesionActual.user.email + '</span> ' +
+            '<button type="button" id="btn-cerrar-sesion" style="background:transparent; border:1px solid var(--border-light); color:var(--text-muted); padding:4px 10px; border-radius:6px; font-size:0.8rem; cursor:pointer;">Salir</button>';
+        var btn = document.getElementById('btn-cerrar-sesion');
+        if (btn) btn.addEventListener('click', function() {
+            supabaseClient.auth.signOut().then(function() { window.location.reload(); });
+        });
+    } else {
+        el.innerHTML = '<a href="/login" style="color:var(--primary-color); font-weight:700; text-decoration:none; font-size:0.9rem;">Iniciar sesión →</a>';
+    }
+}
+
+async function sincronizarDesdeNube() {
+    if (!supabaseClient || !sesionActual) return;
+    var uid = sesionActual.user.id;
+    var res = await supabaseClient.from('perfil_juego').select('*').eq('user_id', uid).maybeSingle();
+    if (res.error) { console.error(res.error); return; }
+    if (!res.data) {
+        await supabaseClient.from('perfil_juego').insert({
+            user_id: uid,
+            monedas: obtenerMonedas(),
+            animales: obtenerAnimalesComprados(),
+            animal_activo: localStorage.getItem('animalActivo') || null
+        });
+        return;
+    }
+    localStorage.setItem('userCoins', res.data.monedas || 0);
+    localStorage.setItem('userAnimales', JSON.stringify(res.data.animales || []));
+    if (res.data.animal_activo) localStorage.setItem('animalActivo', res.data.animal_activo);
+    actualizarContadorMonedas();
+}
+
+async function guardarEnNube() {
+    if (!supabaseClient || !sesionActual) return;
+    await supabaseClient.from('perfil_juego').update({
+        monedas: obtenerMonedas(),
+        animales: obtenerAnimalesComprados(),
+        animal_activo: localStorage.getItem('animalActivo') || null,
+        actualizado_en: new Date().toISOString()
+    }).eq('user_id', sesionActual.user.id);
+}
+
+inicializarSesion();
+
+    function mostrarMensaje(texto, tipo) {
+        var el = document.getElementById('mensaje-login');
+        el.textContent = texto;
+        el.className = tipo;
+    }
+
+    document.getElementById('form-login').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var email = document.getElementById('email-login').value.trim();
+        var pass = document.getElementById('pass-login').value;
+        mostrarMensaje('Ingresando...', '');
+        supabaseClient.auth.signInWithPassword({ email: email, password: pass })
+            .then(function(res) {
+                if (res.error) { mostrarMensaje('Correo o contraseña incorrectos.', 'error'); return; }
+                mostrarMensaje('¡Listo! Redirigiendo...', 'exito');
+                setTimeout(function() { window.location.href = '/app'; }, 600);
+            });
+    });
+
+    document.getElementById('btn-registrar').addEventListener('click', function() {
+        var email = document.getElementById('email-login').value.trim();
+        var pass = document.getElementById('pass-login').value;
+        if (!email || pass.length < 6) {
+            mostrarMensaje('Escribe tu correo y una contraseña de al menos 6 caracteres.', 'error');
+            return;
+        }
+        mostrarMensaje('Creando cuenta...', '');
+        supabaseClient.auth.signUp({ email: email, password: pass })
+            .then(function(res) {
+                if (res.error) { mostrarMensaje(res.error.message, 'error'); return; }
+                mostrarMensaje('Cuenta creada. Ya puedes ingresar.', 'exito');
+            });
+    });
+
+    supabaseClient.auth.getSession().then(function(res) {
+        if (res.data && res.data.session) window.location.href = '/app';
+    });
+</script>
 </body>
 </html>
 """
