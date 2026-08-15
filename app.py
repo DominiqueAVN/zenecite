@@ -462,29 +462,16 @@ def buscar_en_semantic_scholar(tema):
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
     params = {
         "query": tema,
-        "fields": "title,authors,year,openAccessPdf,externalIds,abstract",  # se agregó "abstract"
+        "fields": "title,authors,year,openAccessPdf,externalIds,abstract",
         "limit": 6
     }
-    # ... el resto de la función igual, y en el diccionario del paper agrega:
-    papers.append({
-        "titulo": item.get("title", "Sin título"),
-        "autores": autores,
-        "año": item.get("year", "s.f."),
-        "doi": doi,
-        "enlace": f"https://www.semanticscholar.org/paper/{item.get('paperId', '')}",
-        "pdf_gratis": pdf_url,
-        "abstract": item.get("abstract") or "",  # nuevo campo
-        "en_espanol": detectar_idioma_titulo(item.get("title", "")),
-        "fuente": "Semantic Scholar", "region": None,
-        "tipo": "academico"
-    })
     headers = {"User-Agent": "Mozilla/5.0 (AcademicCiteBot/1.0)"}
+    papers = []
     try:
         r = requests.get(url, params=params, headers=headers, timeout=6)
         if r.status_code != 200:
-            return []
+            return papers
         data = r.json()
-        papers = []
         for item in data.get("data", []):
             autores_raw = item.get("authors", [])
             autores = ", ".join([a.get("name", "") for a in autores_raw[:3]]) if autores_raw else "Anon."
@@ -503,6 +490,7 @@ def buscar_en_semantic_scholar(tema):
                 "doi": doi,
                 "enlace": f"https://www.semanticscholar.org/paper/{item.get('paperId', '')}",
                 "pdf_gratis": pdf_url,
+                "abstract": item.get("abstract") or "",
                 "en_espanol": detectar_idioma_titulo(item.get("title", "")),
                 "fuente": "Semantic Scholar", "region": None,
                 "tipo": "academico"
@@ -510,7 +498,7 @@ def buscar_en_semantic_scholar(tema):
         return papers
     except Exception as e:
         print(f"Error Semantic Scholar: {e}")
-        return []
+        return papers
 
 @cache.memoize(timeout=600)
 def buscar_en_openalex(tema):
