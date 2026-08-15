@@ -25,12 +25,22 @@ CONFIG = {
     "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
 }
 _CACHE_DIR = os.environ.get("CACHE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache"))
-cache = Cache(config={
-    "CACHE_TYPE": "FileSystemCache",
-    "CACHE_DIR": _CACHE_DIR,
-    "CACHE_DEFAULT_TIMEOUT": 600,
-    "CACHE_THRESHOLD": 5000,
-})
+_REDIS_URL = os.environ.get("REDIS_URL", "")
+
+if _REDIS_URL:
+    cache = Cache(config={
+        "CACHE_TYPE": "RedisCache",
+        "CACHE_REDIS_URL": _REDIS_URL,
+        "CACHE_DEFAULT_TIMEOUT": 600,
+    })
+else:
+    # Fallback local para desarrollo sin Redis
+    cache = Cache(config={
+        "CACHE_TYPE": "FileSystemCache",
+        "CACHE_DIR": _CACHE_DIR,
+        "CACHE_DEFAULT_TIMEOUT": 600,
+        "CACHE_THRESHOLD": 5000,
+    })
 
 def obtener_query_ingles(tema, idioma_usuario):
     if idioma_usuario == "en":
@@ -83,14 +93,14 @@ def generar_cita(paper, formato="apa"):
         else: return f'{autores}. "{titulo}." {anio}, {enlace}.'
     return ""
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static")
 cache.init_app(app)
 
 limiter = Limiter(
     key_func=get_remote_address,
     app=app,
     default_limits=["200 per hour"],
-    storage_uri=os.environ.get("RATELIMIT_STORAGE_URI", "memory://"),
+    storage_uri=_REDIS_URL or "memory://",
 )
 
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
@@ -100,22 +110,27 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.environ.get("FORCE_HTTPS", "True").lower() == "true",
 )
+from flask import g
 
+@app.before_request
+def generar_nonce():
+    g.csp_nonce = secrets.token_urlsafe(16)
 @app.after_request
 def agregar_cabeceras_seguridad(resp):
+    nonce = getattr(g, "csp_nonce", "")
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "SAMEORIGIN"
     resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     resp.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     resp.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: https:; "
-        "frame-src 'self' https://docs.google.com; "
-        "connect-src 'self' https:; "
-        "object-src 'none'; "
-        "base-uri 'self';"
+        f"default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        f"style-src 'self' 'unsafe-inline'; "  # el CSS embebido queda igual por ahora
+        f"img-src 'self' data: https:; "
+        f"frame-src 'self' https://docs.google.com; "
+        f"connect-src 'self' https:; "
+        f"object-src 'none'; "
+        f"base-uri 'self';"
     )
     return resp
 
@@ -587,6 +602,11 @@ def buscar_en_repositorios(tema):
                 continue
     return resultados
 
+def _tema_es_valido(tema):
+    if not tema or len(tema) > 300:
+        return False
+    return bool(re.match(r'^[\w\s.,;:()áéíóúñÁÉÍÓÚÑ\-\'"¿?]+$', tema, re.UNICODE))
+
 def ejecutar_busqueda_completa(tema, idioma):
     tema_en = obtener_query_ingles(tema, idioma)
     tema_busqueda_global = f"{tema} {tema_en}" if tema_en != tema else tema
@@ -642,6 +662,14 @@ def ejecutar_busqueda_completa(tema, idioma):
 
 _TAMANO_MAX_PDF = 30 * 1024 * 1024  # 30 MB
 
+_DOMINIOS_PDF_PERMITIDOS = (
+    "doi.org", "unpaywall.org", "semanticscholar.org",
+    "ncbi.nlm.nih.gov", "arxiv.org", "core.ac.uk",
+    "researchgate.net", "crossref.org", "openalex.org",
+    "repositorio.unsa.edu.pe", "repositorio.unam.mx",
+    "ri.conicet.gov.ar", "repositorio.unal.edu.co", "repositorio.uchile.cl",
+)
+
 def _url_es_segura(url):
     try:
         partes = urlparse(url)
@@ -649,16 +677,18 @@ def _url_es_segura(url):
         return False
     if partes.scheme not in ("http", "https"):
         return False
-    if not partes.hostname:
+    host = (partes.hostname or "").lower()
+    if not host:
+        return False
+    if not any(host == d or host.endswith("." + d) for d in _DOMINIOS_PDF_PERMITIDOS):
         return False
     try:
-        infos = socket.getaddrinfo(partes.hostname, None)
+        infos = socket.getaddrinfo(host, None)
     except Exception:
         return False
     for info in infos:
-        ip_str = info[4][0]
         try:
-            ip = ipaddress.ip_address(ip_str)
+            ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
@@ -701,7 +731,7 @@ def api_preview_pdf():
 
 @app.route("/")
 def splash():
-    return render_template_string(SPLASH_ZENECITE)
+    return render_template_string(SPLASH_ZENECITE, csp_nonce=g.csp_nonce)
 
 @app.route("/app", methods=["GET", "POST"])
 @limiter.limit("30 per minute")
@@ -747,18 +777,18 @@ def inicio():
                 session["ultimo_tema_extracto"] = tema_para_buscar
 
     return render_template_string(
-        PLANTILLA, t=t, resultados=resultados, sugerencias=sugerencias,
-        tema_buscado=tema_buscado, sugerencias_extracto=sugerencias_extracto,
-        tab_activa=tab_activa, idioma_actual=idioma,
-    )
+    PLANTILLA, t=t, resultados=resultados, sugerencias=sugerencias,
+    tema_buscado=tema_buscado, sugerencias_extracto=sugerencias_extracto,
+    tab_activa=tab_activa, idioma_actual=idioma, csp_nonce=g.csp_nonce,
+)
 
 @app.route("/api/buscar", methods=["POST"])
 @limiter.limit("20 per minute")
 def api_buscar():
     idioma = session.get("idioma", "es")
     tema = request.form.get("tema", "").strip()
-    if not tema:
-        return jsonify({"error": "tema_vacio"}), 400
+    if not tema or not _tema_es_valido(tema):
+        return jsonify({"error": "tema_invalido"}), 400
     papers = ejecutar_busqueda_completa(tema, idioma)
     return jsonify({"tema": tema, "papers": papers})
 
@@ -778,8 +808,10 @@ SPLASH_ZENECITE = r"""
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ZENECITE — Verificador Académico Global</title>
     <style>
+        /* ==================== ACCESIBILIDAD GLOBAL ==================== */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
+            cursor: auto !important;
             background-color: #0B0F19;
             display: flex;
             justify-content: center;
@@ -790,31 +822,73 @@ SPLASH_ZENECITE = r"""
             font-family: 'Segoe UI', sans-serif;
             overflow: hidden;
             position: relative;
-            cursor: none;
         }
+
+        /* Foco visible SOLO con teclado */
+        a:focus-visible,
+        button:focus-visible,
+        input:focus-visible,
+        textarea:focus-visible,
+        summary:focus-visible,
+        [tabindex]:focus-visible {
+            outline: 3px solid #34D399 !important;
+            outline-offset: 2px !important;
+            border-radius: 4px !important;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px !important;
+            height: 1px !important;
+            padding: 0 !important;
+            margin: -1px !important;
+            overflow: hidden !important;
+            clip: rect(0, 0, 0, 0) !important;
+            white-space: nowrap !important;
+            border: 0 !important;
+        }
+
+        /* Skip link: visible SOLO al enfocarlo con Tab */
+        .skip-link {
+            position: absolute;
+            left: -9999px;
+            top: 0;
+            z-index: 10000;
+            background: #10B981;
+            color: #0B1120;
+            padding: 10px 18px;
+            font-weight: 700;
+            border-radius: 0 0 8px 0;
+            text-decoration: none;
+        }
+        .skip-link:focus {
+            left: 0;
+        }
+
+        /* ===== REDUCED MOTION: cubre TODAS las animaciones ===== */
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.001ms !important;
+                scroll-behavior: auto !important;
+            }
+            .brand-name,
+            .tagline,
+            .enter-btn {
+                animation: none !important;
+                opacity: 1 !important;
+                background-position: 0 0 !important;
+            }
+        }
+
         #particle-canvas {
             position: absolute;
             top: 0; left: 0;
             width: 100%; height: 100%;
             z-index: 0;
-        }
-        #cursor-dot, #cursor-ring {
-            position: fixed;
-            top: 0; left: 0;
-            pointer-events: none;
-            z-index: 9999;
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-        }
-        #cursor-dot {
-            width: 6px; height: 6px;
-            background: #34D399;
-            box-shadow: 0 0 10px 2px rgba(52, 211, 153, 0.8);
-        }
-        #cursor-ring {
-            width: 34px; height: 34px;
-            border: 1.5px solid rgba(16, 185, 129, 0.55);
-            transition: width 0.2s ease, height 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
         }
         .content-layer {
             position: relative;
@@ -858,7 +932,7 @@ SPLASH_ZENECITE = r"""
             font-size: 14px;
             letter-spacing: 4px;
             text-transform: uppercase;
-            cursor: none;
+            cursor: auto;
             border-radius: 6px;
             opacity: 0;
             animation: fadeUp 1s ease 1.4s forwards;
@@ -914,25 +988,25 @@ SPLASH_ZENECITE = r"""
             .brand-name { font-size: 44px; letter-spacing: 8px; }
             .tagline { font-size: 11px; letter-spacing: 4px; }
             .enter-btn { padding: 12px 30px; font-size: 12px; }
-            #cursor-dot, #cursor-ring { display: none; }
-            body { cursor: auto; }
         }
     </style>
 </head>
 <body>
+    <a href="#main-content" class="skip-link">Saltar al contenido principal</a>
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
 
-    <canvas id="particle-canvas"></canvas>
-    <div id="cursor-ring"></div>
-    <div id="cursor-dot"></div>
-
-    <div class="content-layer">
-        <div class="brand-name">ZENECITE</div>
-        <div class="tagline">Verificador Académico Global</div>
+    <main id="main-content" class="content-layer">
+        <h1 class="brand-name">ZENECITE</h1>
+        <p class="tagline">Verificador Académico Global</p>
         <a href="/app" class="enter-btn">Entrar al Verificador →</a>
-    </div>
+    </main>
 
-    <script>
+    <script nonce="{{ csp_nonce }}">
     (function() {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            document.getElementById('particle-canvas').style.display = 'none';
+            return;
+        }
         const canvas = document.getElementById("particle-canvas");
         const ctx = canvas.getContext("2d");
         let W, H;
@@ -1023,37 +1097,6 @@ SPLASH_ZENECITE = r"""
         }
         draw();
     })();
-
-    // Cursor personalizado: punto solido + anillo con retraso (efecto "trail")
-    (function() {
-        const dot = document.getElementById('cursor-dot');
-        const ring = document.getElementById('cursor-ring');
-        if (!dot || !ring || window.matchMedia('(max-width: 600px)').matches) return;
-        let mouseX = 0, mouseY = 0, ringX = 0, ringY = 0;
-        window.addEventListener('mousemove', function(e) {
-            mouseX = e.clientX; mouseY = e.clientY;
-            dot.style.left = mouseX + 'px';
-            dot.style.top = mouseY + 'px';
-        });
-        function animarAnillo() {
-            ringX += (mouseX - ringX) * 0.18;
-            ringY += (mouseY - ringY) * 0.18;
-            ring.style.left = ringX + 'px';
-            ring.style.top = ringY + 'px';
-            requestAnimationFrame(animarAnillo);
-        }
-        animarAnillo();
-        document.querySelectorAll('a, button, .enter-btn').forEach(function(el) {
-            el.addEventListener('mouseenter', function() {
-                ring.style.width = '54px'; ring.style.height = '54px';
-                ring.style.borderColor = 'rgba(52, 211, 153, 0.9)';
-            });
-            el.addEventListener('mouseleave', function() {
-                ring.style.width = '34px'; ring.style.height = '34px';
-                ring.style.borderColor = 'rgba(16, 185, 129, 0.55)';
-            });
-        });
-    })();
     </script>
 </body>
 </html>
@@ -1065,10 +1108,8 @@ PLANTILLA = r"""
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ t.titulo_pagina }}</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
-    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
     <style>
+        /* ==================== ACCESIBILIDAD GLOBAL ==================== */
         :root {
             --bg-dark: #0B1120;
             --bg-card: rgba(20, 30, 45, 0.75);
@@ -1094,25 +1135,72 @@ PLANTILLA = r"""
             color: var(--text-main);
             min-height: 100vh;
             overflow-x: hidden;
-            cursor: none;
+            cursor: auto !important;
         }
 
-        /* ==================== CURSOR PERSONALIZADO ==================== */
-        #cursor-dot, #cursor-ring {
-            position: fixed; top: 0; left: 0; pointer-events: none;
-            z-index: 9999; border-radius: 50%; transform: translate(-50%, -50%);
-        }
-        #cursor-dot { width: 6px; height: 6px; background: var(--primary-color); box-shadow: 0 0 10px 2px rgba(16, 185, 129, 0.7); }
-        #cursor-ring { width: 30px; height: 30px; border: 1.5px solid rgba(16, 185, 129, 0.5); transition: width 0.18s ease, height 0.18s ease, border-color 0.18s ease, background 0.18s ease; }
-        @media (max-width: 768px) {
-            #cursor-dot, #cursor-ring { display: none; }
-            body { cursor: auto; }
+        /* Foco visible SOLO con teclado */
+        a:focus-visible,
+        button:focus-visible,
+        input:focus-visible,
+        textarea:focus-visible,
+        summary:focus-visible,
+        [tabindex]:focus-visible {
+            outline: 3px solid #34D399 !important;
+            outline-offset: 2px !important;
+            border-radius: 4px !important;
         }
 
-        /* ==================== SISTEMA DE ICONOS SVG ====================
-           Iconos vectoriales sólidos, monocromos (heredan color con currentColor
-           via mask), en vez de emoji. Se ven consistentes en cualquier
-           sistema operativo/navegador y se pueden colorear con CSS. */
+        .sr-only {
+            position: absolute;
+            width: 1px !important;
+            height: 1px !important;
+            padding: 0 !important;
+            margin: -1px !important;
+            overflow: hidden !important;
+            clip: rect(0, 0, 0, 0) !important;
+            white-space: nowrap !important;
+            border: 0 !important;
+        }
+
+        .skip-link {
+            position: absolute;
+            left: -9999px;
+            top: 0;
+            z-index: 10000;
+            background: #10B981;
+            color: #0B1120;
+            padding: 10px 18px;
+            font-weight: 700;
+            border-radius: 0 0 8px 0;
+            text-decoration: none;
+        }
+        .skip-link:focus {
+            left: 0;
+        }
+
+        /* ===== REDUCED MOTION: cubre TODAS las animaciones ===== */
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.001ms !important;
+                scroll-behavior: auto !important;
+            }
+            .brand-name, .tagline, .enter-btn,
+            .brand-text, .brand-icon-wrap::before, .brand-icon-wrap .icon,
+            .skeleton, .loader-canvas-container canvas, #loaderCanvas {
+                animation: none !important;
+                opacity: 1 !important;
+                background-position: 0 0 !important;
+            }
+            .nav-boton::before {
+                transform: scaleY(1) !important;
+            }
+        }
+
+        /* ===== ICONOS ===== */
         .icon {
             display: inline-block;
             width: 1em;
@@ -1145,6 +1233,7 @@ PLANTILLA = r"""
         .icon-x { -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.5' stroke-linecap='round'%3E%3Cline x1='5' y1='5' x2='19' y2='19'/%3E%3Cline x1='19' y1='5' x2='5' y2='19'/%3E%3C/svg%3E"); mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.5' stroke-linecap='round'%3E%3Cline x1='5' y1='5' x2='19' y2='19'/%3E%3Cline x1='19' y1='5' x2='5' y2='19'/%3E%3C/svg%3E"); }
         .icon-doc-mini { -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 2h9l5 5v15H6z'/%3E%3Cpath d='M15 2v5h5'/%3E%3C/svg%3E"); mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 2h9l5 5v15H6z'/%3E%3Cpath d='M15 2v5h5'/%3E%3C/svg%3E"); }
 
+        /* ===== LAYOUT ===== */
         .layout-wrapper { display: flex; min-height: 100vh; }
         .sidebar {
             width: 260px; position: fixed; top: 0; left: 0; height: 100vh;
@@ -1152,7 +1241,6 @@ PLANTILLA = r"""
             border-right: 1px solid var(--border-light);
             display: flex; flex-direction: column; padding: 25px 15px; z-index: 1000;
         }
-        /* ==================== LOGO SIEMPRE ANIMADO ==================== */
         .brand {
             font-weight: 800; font-size: 1.3rem; color: var(--primary-color);
             display: flex; align-items: center; gap: 10px; padding: 0 10px 20px 10px;
@@ -1193,7 +1281,7 @@ PLANTILLA = r"""
         .sidebar-nav { display: flex; flex-direction: column; gap: 5px; flex-grow: 1; }
         .nav-boton {
             padding: 12px 15px; border-radius: 8px; border: none; background: transparent;
-            color: var(--text-muted); font-weight: 600; font-size: 0.95rem; cursor: none;
+            color: var(--text-muted); font-weight: 600; font-size: 0.95rem; cursor: pointer;
             transition: all 0.25s ease; text-align: left; display: flex; align-items: center; gap: 12px;
             position: relative; overflow: hidden;
         }
@@ -1213,7 +1301,7 @@ PLANTILLA = r"""
         .sidebar-footer { margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border-light); display: flex; flex-direction: column; gap: 15px; }
         .lang-switch a { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; margin-right: 10px; transition: color 0.2s; }
         .lang-switch a:hover { color: var(--primary-color); }
-        .theme-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--border-light); color: var(--text-main); padding: 8px 15px; border-radius: 8px; cursor: none; font-size: 0.9rem; width: 100%; text-align: left; transition: background 0.2s; }
+        .theme-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--border-light); color: var(--text-main); padding: 8px 15px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; width: 100%; text-align: left; transition: background 0.2s; }
         .theme-btn:hover { background: rgba(255,255,255,0.1); }
         .main-content { margin-left: 260px; flex: 1; padding: 40px; max-width: 1400px; }
         .top-hero { margin-bottom: 30px; }
@@ -1232,7 +1320,7 @@ PLANTILLA = r"""
         textarea:focus, input[type="text"]:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15); }
         button.accion {
             background: var(--primary-color); color: #0B1120; border: none; padding: 12px 28px;
-            border-radius: 10px; font-size: 16px; font-weight: 700; cursor: none;
+            border-radius: 10px; font-size: 16px; font-weight: 700; cursor: pointer;
             transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 8px;
             position: relative; overflow: hidden;
         }
@@ -1255,14 +1343,14 @@ PLANTILLA = r"""
         .tarjeta.no-existe { border-left: 4px solid var(--danger); }
         .tarjeta p { margin: 6px 0; color: var(--text-muted); line-height: 1.5; }
         .tarjeta p strong { color: #fff; }
-        .titulo-clickable { color: var(--primary-color); text-decoration: none; font-weight: 700; font-size: 1.05rem; cursor: none; line-height: 1.4; display: block; margin-bottom: 6px; transition: color 0.2s ease; }
+        .titulo-clickable { color: var(--primary-color); text-decoration: none; font-weight: 700; font-size: 1.05rem; cursor: pointer; line-height: 1.4; display: block; margin-bottom: 6px; transition: color 0.2s ease; }
         .titulo-clickable:hover { text-decoration: underline; color: #34D399; }
-        .badge-region { display: inline-block; font-size: 11px; font-weight: bold; padding: 4px 10px; border-radius: 6px; margin-bottom: 8px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.25); }
-        .badge-fuente { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: bold; padding: 4px 10px; border-radius: 6px; margin-bottom: 8px; margin-right: 6px; background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.25); }
-        .badge-es { display: inline-block; background: rgba(245, 158, 11, 0.15); color: #fbbf24; font-size: 10px; font-weight: bold; padding: 3px 8px; border-radius: 4px; margin-left: 6px; border: 1px solid rgba(245,158,11,0.2); }
-        .badge-pdf { display: inline-flex; align-items: center; gap: 4px; background: rgba(16, 185, 129, 0.15); color: #34d399; font-size: 10px; font-weight: bold; padding: 3px 8px; border-radius: 4px; margin-left: 6px; border: 1px solid rgba(16,185,129,0.2); }
+        .badge-region { display: inline-block; font-size: 11px; font-weight: bold; padding: 4px 10px; border-radius: 6px; margin-bottom: 8px; background: rgba(59, 130, 246, 0.22); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.25); }
+        .badge-fuente { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: bold; padding: 4px 10px; border-radius: 6px; margin-bottom: 8px; margin-right: 6px; background: rgba(16, 185, 129, 0.22); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.25); }
+        .badge-es { display: inline-block; background: rgba(245, 158, 11, 0.22); color: #fbbf24; font-size: 10px; font-weight: bold; padding: 3px 8px; border-radius: 4px; margin-left: 6px; border: 1px solid rgba(245,158,11,0.2); }
+        .badge-pdf { display: inline-flex; align-items: center; gap: 4px; background: rgba(16, 185, 129, 0.22); color: #34d399; font-size: 10px; font-weight: bold; padding: 3px 8px; border-radius: 4px; margin-left: 6px; border: 1px solid rgba(16,185,129,0.2); }
         .enlaces-paper { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; align-items: center; }
-        .enlace-web, .enlace-pdf, .enlace-preview, .guardar-btn { display: inline-flex; align-items: center; gap: 6px; cursor: none; }
+        .enlace-web, .enlace-pdf, .enlace-preview, .guardar-btn { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
         .enlace-web { background: rgba(59, 130, 246, 0.1); color: #60a5fa !important; padding: 7px 14px; border-radius: 8px; font-size: 13px; text-decoration: none !important; border: 1px solid rgba(59, 130, 246, 0.3); font-weight: 600; transition: all 0.2s; }
         .enlace-web:hover { background: rgba(59, 130, 246, 0.2); transform: translateY(-1px); }
         .enlace-pdf { background: rgba(16, 185, 129, 0.1); color: var(--primary-color) !important; padding: 7px 14px; border-radius: 8px; font-size: 13px; text-decoration: none !important; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 600; transition: all 0.2s; }
@@ -1283,7 +1371,7 @@ PLANTILLA = r"""
             display: inline-flex; align-items: center; gap: 6px;
             background: rgba(255,255,255,0.05); border: 1px solid var(--border-light);
             color: var(--text-muted); padding: 8px 16px; border-radius: 20px;
-            cursor: none; font-size: 0.9rem; font-weight: 600; transition: all 0.2s;
+            cursor: pointer; font-size: 0.9rem; font-weight: 600; transition: all 0.2s;
         }
         .filtro-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
         .filtro-btn.activo { background: var(--primary-color); color: #0B1120; border-color: var(--primary-color); }
@@ -1294,7 +1382,7 @@ PLANTILLA = r"""
         .buscar-tambien a {
             background: rgba(255,255,255,0.05); border: 1px solid var(--border-light);
             color: var(--text-main); padding: 8px 16px; border-radius: 8px;
-            text-decoration: none; font-size: 0.9rem; font-weight: 600; transition: all 0.2s; cursor: none;
+            text-decoration: none; font-size: 0.9rem; font-weight: 600; transition: all 0.2s; cursor: pointer;
         }
         .buscar-tambien a:hover { background: rgba(16, 185, 129, 0.1); border-color: var(--primary-color); color: var(--primary-color); transform: translateY(-2px); }
         .modal-pdf {
@@ -1316,7 +1404,7 @@ PLANTILLA = r"""
         .modal-header h3 { margin: 0; color: #fff; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
         .modal-cerrar {
             background: var(--danger); color: #fff; border: none; width: 32px; height: 32px;
-            border-radius: 8px; cursor: none; font-size: 18px; font-weight: bold;
+            border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold;
             display: flex; align-items: center; justify-content: center;
         }
         .modal-cerrar .icon { background-color: #fff; }
@@ -1349,916 +1437,1013 @@ PLANTILLA = r"""
             text-shadow: 0 2px 10px rgba(0,0,0,0.5); pointer-events: none;
             text-align: center;
         }
-        .sugerencia-item { padding: 12px; cursor: none; border-bottom: 1px solid var(--border-light); color: var(--text-main); transition: background 0.15s; display: flex; align-items: center; gap: 10px; }
+        .sugerencia-item { padding: 12px; cursor: pointer; border-bottom: 1px solid var(--border-light); color: var(--text-main); transition: background 0.15s; display: flex; align-items: center; gap: 10px; }
         .sugerencia-item:hover { background: rgba(16, 185, 129, 0.1); }
         .sugerencia-item .icon { color: var(--text-muted); }
         .aviso-caja { display: flex; gap: 12px; align-items: flex-start; padding: 15px; margin-bottom: 20px; border-radius: 10px; }
         .aviso-caja .icon { margin-top: 2px; }
+
+        /* Toast visual */
+        #toast-visual {
+            display: none;
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #10B981;
+            color: #0B1120;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            z-index: 9999;
+            max-width: 400px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+        #toast-visual.warning { background: #F59E0B; }
+        #toast-visual.error { background: #EF4444; color: white; }
+
         @media (max-width: 768px) {
             .sidebar { width: 100%; height: auto; position: relative; }
             .main-content { margin-left: 0; padding: 20px; }
             .layout-wrapper { flex-direction: column; }
             .grid-resultados { grid-template-columns: 1fr; }
-            body, .nav-boton, .theme-btn, button.accion, .titulo-clickable, .enlace-web, .enlace-pdf, .enlace-preview, .guardar-btn, .filtro-btn, .buscar-tambien a, .sugerencia-item, .modal-cerrar { cursor: auto; }
         }
     </style>
 </head>
 <body>
+    <a href="#main-content" class="skip-link">Saltar al contenido principal</a>
 
-<div id="cursor-ring"></div>
-<div id="cursor-dot"></div>
+    <!-- Toast accesible (solo lector de pantalla) -->
+    <div id="toast" class="sr-only" role="status" aria-live="polite"></div>
 
-<!-- MODAL PDF -->
-<div class="modal-pdf" id="modalPdf">
-    <div class="modal-contenido">
-        <div class="modal-header">
-            <h3><span class="icon icon-file"></span> Previsualización del documento</h3>
-            <button class="modal-cerrar" id="btnCerrarModal" type="button"><span class="icon icon-x"></span></button>
-        </div>
-        <div class="modal-body">
-            <div class="modal-estado oculto" id="modalCargando">
-                <div class="spinner"></div>
-                <span>{{ t.preview_cargando }}</span>
+    <!-- Toast visual (para usuarios videntes) -->
+    <div id="toast-visual"></div>
+
+    <!-- Anuncio de resultados (aria-live) -->
+    <div id="anuncio-resultados" class="sr-only" aria-live="polite"></div>
+
+    <!-- MODAL PDF -->
+    <div class="modal-pdf" id="modalPdf" role="dialog" aria-modal="true" aria-label="Vista previa del documento PDF">
+        <div class="modal-contenido">
+            <div class="modal-header">
+                <h3><span class="icon icon-file" aria-hidden="true"></span> Previsualización del documento</h3>
+                <button class="modal-cerrar" id="btnCerrarModal" type="button" aria-label="Cerrar vista previa"><span class="icon icon-x" aria-hidden="true"></span></button>
             </div>
-            <div class="modal-estado oculto" id="modalError">
-                <span class="icon icon-alert icon-lg" style="color:var(--warning);"></span>
-                <span id="modalErrorTexto">{{ t.preview_error }}</span>
-                <a class="abrir-externo" id="modalAbrirExterno" href="#" target="_blank" rel="noopener">Abrir en pestaña nueva →</a>
+            <div class="modal-body">
+                <div class="modal-estado oculto" id="modalCargando">
+                    <div class="spinner"></div>
+                    <span>{{ t.preview_cargando }}</span>
+                </div>
+                <div class="modal-estado oculto" id="modalError">
+                    <span class="icon icon-alert icon-lg" aria-hidden="true" style="color:var(--warning);"></span>
+                    <span id="modalErrorTexto">{{ t.preview_error }}</span>
+                    <a class="abrir-externo" id="modalAbrirExterno" href="#" target="_blank" rel="noopener">Abrir en pestaña nueva →</a>
+                </div>
+                <iframe class="modal-iframe" id="iframePdf" src="about:blank" title="Visor de PDF"></iframe>
             </div>
-            <iframe class="modal-iframe" id="iframePdf" src="about:blank"></iframe>
         </div>
     </div>
-</div>
 
-<div class="layout-wrapper">
-    <aside class="sidebar">
-        <div class="brand">
-            <span class="brand-icon-wrap"><span class="icon icon-shield icon-lg"></span></span>
-            <span class="brand-text">ZENECITE</span>
-        </div>
-        <nav class="sidebar-nav">
-            <button type="button" class="nav-boton" id="nav-verificar" data-tab="verificar"><span class="icon icon-check"></span> {{ t.nav_verificar }}</button>
-            <button type="button" class="nav-boton" id="nav-scan" data-tab="scan"><span class="icon icon-bolt"></span> {{ t.nav_scan }}</button>
-            <button type="button" class="nav-boton" id="nav-buscar" data-tab="buscar"><span class="icon icon-search"></span> {{ t.nav_buscar }}</button>
-            <button type="button" class="nav-boton" id="nav-extracto" data-tab="extracto"><span class="icon icon-doc-mini"></span> {{ t.nav_extracto }}</button>
-            <button type="button" class="nav-boton" id="nav-guia" data-tab="guia"><span class="icon icon-book"></span> {{ t.nav_guia }}</button>
-            <button type="button" class="nav-boton" id="nav-constructor" data-tab="constructor"><span class="icon icon-grid"></span> {{ t.nav_constructor }}</button>
-            <button type="button" class="nav-boton" id="nav-biblio" data-tab="biblio"><span class="icon icon-star"></span> {{ t.nav_biblio }}</button>
-        </nav>
-        <div class="sidebar-footer">
-            <div class="lang-switch">
-                <a href="?idioma=es">ES</a> <a href="?idioma=en">EN</a> <a href="?idioma=zh">中文</a>
+    <div class="layout-wrapper">
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="brand-icon-wrap"><span class="icon icon-shield icon-lg" aria-hidden="true"></span></span>
+                <span class="brand-text">ZENECITE</span>
             </div>
-        </div>
-    </aside>
-
-    <main class="main-content">
-        <header class="top-hero">
-            <h1>{{ t.titulo_pagina }}</h1>
-            <p>{{ t.subtitulo }}</p>
-        </header>
-
-        <div class="tab-content {% if tab_activa == 'verificar' %}active{% endif %}" id="tab-verificar">
-            <div class="seccion glass">
-                <h2><span class="icon icon-check"></span> {{ t.seccion1_titulo }}</h2>
-                <form method="POST">
-                    <textarea name="cita" rows="6" placeholder="{{ t.placeholder_cita }}"></textarea>
-                    <button type="submit" class="accion" name="accion" value="verificar">{{ t.boton_verificar }}</button>
-                </form>
-                {% if resultados and tab_activa == 'verificar' %}
-                    <div class="grid-resultados">
-                    {% for resultado in resultados %}
-                        <div class="tarjeta {% if 'SI exista' in resultado.mensaje %}si-existe{% else %}no-existe{% endif %}">
-                            <p><strong>Cita:</strong> {{ resultado.original }}</p>
-                            {% if resultado.cita_corregida %}
-                                <p><strong>Sugerencia:</strong> {{ resultado.cita_corregida }}</p>
-                                <button type="button" class="accion corregir-btn" data-original="{{ resultado.original|e }}" data-corregida="{{ resultado.cita_corregida|e }}" style="background:var(--warning); padding:6px 18px; font-size:14px;">{{ t.usar_correccion }}</button>
-                            {% endif %}
-                            <p><strong>Título:</strong> <a href="https://doi.org/{{ resultado.doi }}" target="_blank" class="titulo-clickable">{{ resultado.titulo }}</a></p>
-                            <p><strong>DOI:</strong> {{ resultado.doi }} · <strong>Similitud:</strong> {{ resultado.similitud }}</p>
-                            <p>{{ resultado.mensaje }}</p>
-                        </div>
-                    {% endfor %}
-                    </div>
-                {% endif %}
+            <nav class="sidebar-nav" aria-label="Navegación principal">
+                <button type="button" class="nav-boton" id="nav-verificar" data-tab="verificar"><span class="icon icon-check" aria-hidden="true"></span> {{ t.nav_verificar }}</button>
+                <button type="button" class="nav-boton" id="nav-scan" data-tab="scan"><span class="icon icon-bolt" aria-hidden="true"></span> {{ t.nav_scan }}</button>
+                <button type="button" class="nav-boton" id="nav-buscar" data-tab="buscar"><span class="icon icon-search" aria-hidden="true"></span> {{ t.nav_buscar }}</button>
+                <button type="button" class="nav-boton" id="nav-extracto" data-tab="extracto"><span class="icon icon-doc-mini" aria-hidden="true"></span> {{ t.nav_extracto }}</button>
+                <button type="button" class="nav-boton" id="nav-guia" data-tab="guia"><span class="icon icon-book" aria-hidden="true"></span> {{ t.nav_guia }}</button>
+                <button type="button" class="nav-boton" id="nav-constructor" data-tab="constructor"><span class="icon icon-grid" aria-hidden="true"></span> {{ t.nav_constructor }}</button>
+                <button type="button" class="nav-boton" id="nav-biblio" data-tab="biblio"><span class="icon icon-star" aria-hidden="true"></span> {{ t.nav_biblio }}</button>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="lang-switch">
+                    <a href="?idioma=es" aria-label="Cambiar a español">ES</a>
+                    <a href="?idioma=en" aria-label="Switch to English">EN</a>
+                    <a href="?idioma=zh" aria-label="切换到中文">中文</a>
+                </div>
             </div>
-        </div>
+        </aside>
 
-        <div class="tab-content {% if tab_activa == 'scan' %}active{% endif %}" id="tab-scan">
-            <div class="seccion glass">
-                <h2><span class="icon icon-bolt"></span> {{ t.scan_titulo }}</h2>
-                <p>{{ t.scan_desc }}</p>
-                <div class="aviso-caja" style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-left: 4px solid var(--warning); color:#fbbf24;">
-                    <span class="icon icon-alert icon-lg"></span>
-                    <span><strong>¿Usaste IA para tu tarea?</strong> Las IA suelen inventar citas bibliográficas. Pega tu lista aquí para auditarla antes de entregar.</span>
-                </div>
-                <form method="POST">
-                    <textarea name="bibliography" rows="10" placeholder="Pega aquí toda tu lista de referencias, una por línea..."></textarea>
-                    <button type="submit" class="accion" name="accion" value="scan_bibliography">{{ t.boton_scan }}</button>
-                </form>
-                {% if resultados and tab_activa == 'scan' %}
-                    <div class="grid-resultados">
-                    {% for resultado in resultados %}
-                        <div class="tarjeta {% if 'SI exista' in resultado.mensaje %}si-existe{% else %}no-existe{% endif %}">
-                            <p><strong>Cita:</strong> {{ resultado.original }}</p>
-                            {% if resultado.cita_corregida %}<p><strong>Sugerencia:</strong> {{ resultado.cita_corregida }}</p>{% endif %}
-                            <p><strong>Título:</strong> <a href="https://doi.org/{{ resultado.doi }}" target="_blank" class="titulo-clickable">{{ resultado.titulo }}</a></p>
-                            <p><strong>DOI:</strong> {{ resultado.doi }} · <strong>Similitud:</strong> {{ resultado.similitud }}</p>
-                            <p>{{ resultado.mensaje }}</p>
-                        </div>
-                    {% endfor %}
-                    </div>
-                {% endif %}
-            </div>
-        </div>
+        <main class="main-content" id="main-content">
+            <header class="top-hero">
+                <h1>{{ t.titulo_pagina }}</h1>
+                <p>{{ t.subtitulo }}</p>
+            </header>
 
-        <div class="tab-content {% if tab_activa == 'buscar' %}active{% endif %}" id="tab-buscar">
-            <div class="seccion glass">
-                <h2><span class="icon icon-search"></span> {{ t.seccion2_titulo }}</h2>
-                <form id="buscar-form" method="POST">
-                    <div style="position:relative; width:100%; margin-bottom:15px;">
-                        <input type="text" name="tema" id="search-input" placeholder="{{ t.placeholder_tema }}" autocomplete="off" style="margin-bottom:0; padding-right: 40px;">
-                        <div id="suggestions-dropdown" style="position:absolute; top:100%; left:0; right:0; background: #1E293B; border:1px solid var(--border-light); border-top:none; max-height:250px; overflow-y:auto; z-index:1000; display:none; border-radius: 0 0 12px 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3);"></div>
-                    </div>
-                    <button type="submit" class="accion" name="accion" value="buscar_todo" id="btn-buscar-submit">{{ t.boton_buscar_todo }}</button>
-                </form>
-
-                <!-- LOADER: solo se activa mientras el fetch esta en curso, y se oculta apenas llega la respuesta -->
-                <div class="loader-canvas-container" id="loaderContainer">
-                    <canvas id="loaderCanvas"></canvas>
-                    <div class="loader-texto" id="loaderTexto">{{ t.loader_buscando }}</div>
-                </div>
-
-                <!-- SKELETON -->
-                <div id="skeleton-container" class="grid-resultados" style="display:none;">
-                    <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
-                </div>
-
-                <p id="buscar-sin-resultados" style="display:none; opacity:0.75; margin-top:20px;">No encontramos resultados para ese tema. Prueba con otras palabras o menos específicas.</p>
-                <p id="buscar-error" style="display:none; color:var(--danger); margin-top:20px;"><span class="icon icon-alert"></span> Ocurrió un error al buscar. Intenta de nuevo en unos segundos.</p>
-
-                <!-- CONTENEDOR DE RESULTADOS: siempre existe en el DOM, se llena y se muestra via JS -->
-                <div id="resultados-buscar-wrapper" style="display:none; margin-top:25px;">
-                    <p style="font-size:1.1rem; margin-bottom:15px;">{{ t.resultados_para }} <strong id="resultados-para-tema" style="color:var(--primary-color);"></strong></p>
-
-                    <!-- FILTROS EN VIVO -->
-                    <div class="filtros-bar">
-                        <button class="filtro-btn activo" data-filtro="todos" type="button">{{ t.filtro_todos }}</button>
-                        <button class="filtro-btn" data-filtro="pdf" type="button"><span class="icon icon-download"></span> {{ t.filtro_pdf }}</button>
-                        <button class="filtro-btn" data-filtro="espanol" type="button">{{ t.filtro_espanol }}</button>
-                        <button class="filtro-btn" data-filtro="reciente" type="button">{{ t.filtro_reciente }}</button>
-                        <button class="filtro-btn" data-filtro="repositorio" type="button"><span class="icon icon-building"></span> {{ t.filtro_repo }}</button>
-                    </div>
-
-                    <!-- RESULTADOS CON PDF -->
-                    <div class="seccion-resultados" id="seccion-pdf">
-                        <h3><span class="icon icon-file"></span> {{ t.seccion_pdf }}</h3>
-                        <div class="grid-resultados" id="grid-pdf"></div>
-                    </div>
-
-                    <!-- RESULTADOS ACADÉMICOS -->
-                    <div class="seccion-resultados" id="seccion-academico">
-                        <h3><span class="icon icon-globe"></span> {{ t.seccion_academico }}</h3>
-                        <div class="grid-resultados" id="grid-academico"></div>
-                    </div>
-
-                    <!-- RESULTADOS REPOSITORIOS -->
-                    <div class="seccion-resultados" id="seccion-repos">
-                        <h3><span class="icon icon-building"></span> {{ t.seccion_repos }}</h3>
-                        <div class="grid-resultados" id="grid-repos"></div>
-                    </div>
-
-                    <!-- BUSCAR TAMBIÉN EN (se arma dinamicamente en JS con el tema) -->
-                    <div class="buscar-tambien" id="buscar-tambien-links"></div>
-                </div>
-
-                {% if tema_buscado %}
-                <!-- INYECCIÓN DE DATOS PARA CARGA INICIAL (recarga completa / JS deshabilitado con fallback) -->
-                <script id="datos-papers" type="application/json">
-                {"tema": {{ tema_buscado|tojson }}, "papers": {{ sugerencias|tojson }}}
-                </script>
-                {% endif %}
-            </div>
-        </div>
-
-
-        <div class="tab-content {% if tab_activa == 'extracto' %}active{% endif %}" id="tab-extracto">
-            <div class="seccion glass">
-                <h2><span class="icon icon-doc-mini"></span> {{ t.seccion3_titulo }}</h2>
-                <form method="POST">
-                    <textarea name="extracto" rows="6" placeholder="{{ t.placeholder_extracto }}"></textarea>
-                    <button type="submit" class="accion" name="accion" value="analizar_extracto">{{ t.boton_extracto }}</button>
-                </form>
-                {% if sugerencias_extracto %}
-                    <div class="grid-resultados">
-                    {% for paper in sugerencias_extracto %}
-                        <div class="tarjeta">
-                            <span class="badge-fuente">{{ paper.fuente or 'CrossRef' }}</span>
-                            {% if paper.region %}<span class="badge-region">{{ paper.region }}</span>{% endif %}
-                            <p><strong><a href="{{ paper.enlace }}" target="_blank" class="titulo-clickable">{{ paper.titulo }}</a></strong></p>
-                            <p>{{ paper.autores }} ({{ paper.año }})</p>
-                            <div class="enlaces-paper">
-                                <a class="enlace-web" href="{{ paper.enlace }}" target="_blank">{{ t.papel_pagina_web }}</a>
-                                {% if paper.pdf_gratis %}<a class="enlace-pdf" href="{{ paper.pdf_gratis }}" target="_blank"><span class="icon icon-download"></span> {{ t.papel_pdf }}</a>{% endif %}
+            <div class="tab-content {% if tab_activa == 'verificar' %}active{% endif %}" id="tab-verificar">
+                <div class="seccion glass">
+                    <h2><span class="icon icon-check" aria-hidden="true"></span> {{ t.seccion1_titulo }}</h2>
+                    <form method="POST">
+                        <label for="cita-textarea" class="sr-only">{{ t.placeholder_cita }}</label>
+                        <textarea id="cita-textarea" name="cita" rows="6" placeholder="{{ t.placeholder_cita }}"></textarea>
+                        <button type="submit" class="accion" name="accion" value="verificar">{{ t.boton_verificar }}</button>
+                    </form>
+                    {% if resultados and tab_activa == 'verificar' %}
+                        <div class="grid-resultados">
+                        {% for resultado in resultados %}
+                            <div class="tarjeta {% if 'SI exista' in resultado.mensaje %}si-existe{% else %}no-existe{% endif %}">
+                                <p><strong>Cita:</strong> {{ resultado.original }}</p>
+                                {% if resultado.cita_corregida %}
+                                    <p><strong>Sugerencia:</strong> {{ resultado.cita_corregida }}</p>
+                                    <button type="button" class="accion corregir-btn" data-original="{{ resultado.original|e }}" data-corregida="{{ resultado.cita_corregida|e }}" style="background:var(--warning); padding:6px 18px; font-size:14px;">{{ t.usar_correccion }}</button>
+                                {% endif %}
+                                <p><strong>Título:</strong> <a href="https://doi.org/{{ resultado.doi }}" target="_blank" class="titulo-clickable">{{ resultado.titulo }}</a></p>
+                                <p><strong>DOI:</strong> {{ resultado.doi }} · <strong>Similitud:</strong> {{ resultado.similitud }}</p>
+                                <p>{{ resultado.mensaje }}</p>
                             </div>
+                        {% endfor %}
                         </div>
-                    {% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="tab-content {% if tab_activa == 'scan' %}active{% endif %}" id="tab-scan">
+                <div class="seccion glass">
+                    <h2><span class="icon icon-bolt" aria-hidden="true"></span> {{ t.scan_titulo }}</h2>
+                    <p>{{ t.scan_desc }}</p>
+                    <div class="aviso-caja" style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-left: 4px solid var(--warning); color:#fbbf24;">
+                        <span class="icon icon-alert icon-lg" aria-hidden="true"></span>
+                        <span><strong>¿Usaste IA para tu tarea?</strong> Las IA suelen inventar citas bibliográficas. Pega tu lista aquí para auditarla antes de entregar.</span>
                     </div>
-                {% endif %}
+                    <form method="POST">
+                        <label for="bibliography-textarea" class="sr-only">Pega aquí tu bibliografía</label>
+                        <textarea id="bibliography-textarea" name="bibliography" rows="10" placeholder="Pega aquí toda tu lista de referencias, una por línea..."></textarea>
+                        <button type="submit" class="accion" name="accion" value="scan_bibliography">{{ t.boton_scan }}</button>
+                    </form>
+                    {% if resultados and tab_activa == 'scan' %}
+                        <div class="grid-resultados">
+                        {% for resultado in resultados %}
+                            <div class="tarjeta {% if 'SI exista' in resultado.mensaje %}si-existe{% else %}no-existe{% endif %}">
+                                <p><strong>Cita:</strong> {{ resultado.original }}</p>
+                                {% if resultado.cita_corregida %}<p><strong>Sugerencia:</strong> {{ resultado.cita_corregida }}</p>{% endif %}
+                                <p><strong>Título:</strong> <a href="https://doi.org/{{ resultado.doi }}" target="_blank" class="titulo-clickable">{{ resultado.titulo }}</a></p>
+                                <p><strong>DOI:</strong> {{ resultado.doi }} · <strong>Similitud:</strong> {{ resultado.similitud }}</p>
+                                <p>{{ resultado.mensaje }}</p>
+                            </div>
+                        {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
             </div>
-        </div>
 
-        <div class="tab-content" id="tab-guia">
-            <div class="seccion glass">
-                <h2><span class="icon icon-book"></span> {{ t.guia_titulo }}</h2>
-                <details><summary><strong>{{ t.guia_texto_intext }}</strong></summary><p>Narrativa: García (2021)... Parentética: (García, 2021).</p></details>
-                <details><summary><strong>{{ t.guia_texto_revista }}</strong></summary><p>Apellido, A. A. (Año). Título. <em>Revista, volumen</em>(número), páginas. DOI</p></details>
-                <details><summary><strong>{{ t.guia_texto_libro }}</strong></summary><p>Apellido, A. A. (Año). <em>Título</em>. Editorial.</p></details>
-                <details><summary><strong>{{ t.guia_texto_tesis }}</strong></summary><p>Apellido, A. A. (Año). <em>Título</em> [Tesis, Universidad]. URL</p></details>
-                <details><summary><strong>{{ t.guia_texto_web }}</strong></summary><p>Autor. (Año). <em>Título</em>. Sitio. URL</p></details>
-                <details><summary><strong>{{ t.guia_texto_vancouver }}</strong></summary><p>(1) en texto · 1. Autor. Título. Revista. Año;Vol(Num):pág.</p></details>
+            <div class="tab-content {% if tab_activa == 'buscar' %}active{% endif %}" id="tab-buscar">
+                <div class="seccion glass">
+                    <h2><span class="icon icon-search" aria-hidden="true"></span> {{ t.seccion2_titulo }}</h2>
+                    <form id="buscar-form" method="POST">
+                        <div style="position:relative; width:100%; margin-bottom:15px;">
+                            <label for="search-input" class="sr-only">{{ t.placeholder_tema }}</label>
+                            <input type="text" name="tema" id="search-input" placeholder="{{ t.placeholder_tema }}" autocomplete="off" style="margin-bottom:0; padding-right: 40px;">
+                            <div id="suggestions-dropdown" role="listbox" style="position:absolute; top:100%; left:0; right:0; background: #1E293B; border:1px solid var(--border-light); border-top:none; max-height:250px; overflow-y:auto; z-index:1000; display:none; border-radius: 0 0 12px 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3);"></div>
+                        </div>
+                        <button type="submit" class="accion" name="accion" value="buscar_todo" id="btn-buscar-submit">{{ t.boton_buscar_todo }}</button>
+                    </form>
+
+                    <div class="loader-canvas-container" id="loaderContainer">
+                        <canvas id="loaderCanvas" aria-hidden="true"></canvas>
+                        <div class="loader-texto" id="loaderTexto">{{ t.loader_buscando }}</div>
+                    </div>
+
+                    <div id="skeleton-container" class="grid-resultados" style="display:none;">
+                        <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+                    </div>
+
+                    <p id="buscar-sin-resultados" style="display:none; opacity:0.75; margin-top:20px;">No encontramos resultados para ese tema. Prueba con otras palabras o menos específicas.</p>
+                    <p id="buscar-error" style="display:none; color:var(--danger); margin-top:20px;"><span class="icon icon-alert" aria-hidden="true"></span> Ocurrió un error al buscar. Intenta de nuevo en unos segundos.</p>
+
+                    <div id="resultados-buscar-wrapper" style="display:none; margin-top:25px;">
+                        <p style="font-size:1.1rem; margin-bottom:15px;">{{ t.resultados_para }} <strong id="resultados-para-tema" style="color:var(--primary-color);"></strong></p>
+
+                        <div class="filtros-bar">
+                            <button class="filtro-btn activo" data-filtro="todos" type="button">{{ t.filtro_todos }}</button>
+                            <button class="filtro-btn" data-filtro="pdf" type="button"><span class="icon icon-download" aria-hidden="true"></span> {{ t.filtro_pdf }}</button>
+                            <button class="filtro-btn" data-filtro="espanol" type="button">{{ t.filtro_espanol }}</button>
+                            <button class="filtro-btn" data-filtro="reciente" type="button">{{ t.filtro_reciente }}</button>
+                            <button class="filtro-btn" data-filtro="repositorio" type="button"><span class="icon icon-building" aria-hidden="true"></span> {{ t.filtro_repo }}</button>
+                        </div>
+
+                        <div class="seccion-resultados" id="seccion-pdf">
+                            <h3><span class="icon icon-file" aria-hidden="true"></span> {{ t.seccion_pdf }}</h3>
+                            <div class="grid-resultados" id="grid-pdf"></div>
+                        </div>
+
+                        <div class="seccion-resultados" id="seccion-academico">
+                            <h3><span class="icon icon-globe" aria-hidden="true"></span> {{ t.seccion_academico }}</h3>
+                            <div class="grid-resultados" id="grid-academico"></div>
+                        </div>
+
+                        <div class="seccion-resultados" id="seccion-repos">
+                            <h3><span class="icon icon-building" aria-hidden="true"></span> {{ t.seccion_repos }}</h3>
+                            <div class="grid-resultados" id="grid-repos"></div>
+                        </div>
+
+                        <div class="buscar-tambien" id="buscar-tambien-links"></div>
+                    </div>
+
+                    {% if tema_buscado %}
+                    <script id="datos-papers" type="application/json">
+                    {"tema": {{ tema_buscado|tojson }}, "papers": {{ sugerencias|tojson }}}
+                    </script>
+                    {% endif %}
+                </div>
             </div>
-        </div>
 
-        <div class="tab-content" id="tab-constructor">
-            <div class="seccion glass">
-                <h2><span class="icon icon-grid"></span> {{ t.constructor_titulo }}</h2>
-                <p>{{ t.constructor_desc }}</p>
-                <p class="puntaje" style="font-size: 1.2rem; color: var(--primary-color);">{{ t.texto_puntaje }}: <span id="puntaje-constructor">0 / 0</span></p>
-                <p><strong>{{ t.constructor_pool }}</strong></p>
-                <div id="piezas-pool" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--border-light); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(0,0,0,0.2);"></div>
-                <p><strong>{{ t.constructor_zona }}</strong></p>
-                <div id="zona-respuesta" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--primary-color); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(16,185,129,0.05);"></div>
-                <button type="button" class="accion" id="btnVerificarConstructor">{{ t.constructor_verificar }}</button>
-                <button type="button" class="accion" id="btnSiguienteConstructor" style="background:#334155; color:white;">{{ t.constructor_siguiente }}</button>
-                <div id="resultado-constructor" style="margin-top:20px;"></div>
+            <div class="tab-content {% if tab_activa == 'extracto' %}active{% endif %}" id="tab-extracto">
+                <div class="seccion glass">
+                    <h2><span class="icon icon-doc-mini" aria-hidden="true"></span> {{ t.seccion3_titulo }}</h2>
+                    <form method="POST">
+                        <label for="extracto-textarea" class="sr-only">{{ t.placeholder_extracto }}</label>
+                        <textarea id="extracto-textarea" name="extracto" rows="6" placeholder="{{ t.placeholder_extracto }}"></textarea>
+                        <button type="submit" class="accion" name="accion" value="analizar_extracto">{{ t.boton_extracto }}</button>
+                    </form>
+                    {% if sugerencias_extracto %}
+                        <div class="grid-resultados">
+                        {% for paper in sugerencias_extracto %}
+                            <div class="tarjeta">
+                                <span class="badge-fuente">{{ paper.fuente or 'CrossRef' }}</span>
+                                {% if paper.region %}<span class="badge-region">{{ paper.region }}</span>{% endif %}
+                                <p><strong><a href="{{ paper.enlace }}" target="_blank" class="titulo-clickable">{{ paper.titulo }}</a></strong></p>
+                                <p>{{ paper.autores }} ({{ paper.año }})</p>
+                                <div class="enlaces-paper">
+                                    <a class="enlace-web" href="{{ paper.enlace }}" target="_blank">{{ t.papel_pagina_web }}</a>
+                                    {% if paper.pdf_gratis %}<a class="enlace-pdf" href="{{ paper.pdf_gratis }}" target="_blank"><span class="icon icon-download" aria-hidden="true"></span> {{ t.papel_pdf }}</a>{% endif %}
+                                </div>
+                            </div>
+                        {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
             </div>
-        </div>
 
-        <div class="tab-content" id="tab-biblio">
-            <div class="seccion glass">
-                <h2><span class="icon icon-star"></span> {{ t.biblio_titulo }}</h2>
-                <p>{{ t.biblio_desc }}</p>
-                <div id="biblio-container" style="margin-top: 20px;"></div>
+            <div class="tab-content" id="tab-guia">
+                <div class="seccion glass">
+                    <h2><span class="icon icon-book" aria-hidden="true"></span> {{ t.guia_titulo }}</h2>
+                    <details><summary><strong>{{ t.guia_texto_intext }}</strong></summary><p>Narrativa: García (2021)... Parentética: (García, 2021).</p></details>
+                    <details><summary><strong>{{ t.guia_texto_revista }}</strong></summary><p>Apellido, A. A. (Año). Título. <em>Revista, volumen</em>(número), páginas. DOI</p></details>
+                    <details><summary><strong>{{ t.guia_texto_libro }}</strong></summary><p>Apellido, A. A. (Año). <em>Título</em>. Editorial.</p></details>
+                    <details><summary><strong>{{ t.guia_texto_tesis }}</strong></summary><p>Apellido, A. A. (Año). <em>Título</em> [Tesis, Universidad]. URL</p></details>
+                    <details><summary><strong>{{ t.guia_texto_web }}</strong></summary><p>Autor. (Año). <em>Título</em>. Sitio. URL</p></details>
+                    <details><summary><strong>{{ t.guia_texto_vancouver }}</strong></summary><p>(1) en texto · 1. Autor. Título. Revista. Año;Vol(Num):pág.</p></details>
+                </div>
             </div>
-        </div>
-    </main>
-</div>
 
-<script>
-// ========== CURSOR PERSONALIZADO (punto solido + anillo con retraso, crece sobre elementos clicables) ==========
-(function() {
-    const dot = document.getElementById('cursor-dot');
-    const ring = document.getElementById('cursor-ring');
-    if (!dot || !ring || window.matchMedia('(max-width: 768px)').matches) return;
-    let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2, ringX = mouseX, ringY = mouseY;
-    window.addEventListener('mousemove', function(e) {
-        mouseX = e.clientX; mouseY = e.clientY;
-        dot.style.left = mouseX + 'px';
-        dot.style.top = mouseY + 'px';
-    });
-    (function animarAnillo() {
-        ringX += (mouseX - ringX) * 0.18;
-        ringY += (mouseY - ringY) * 0.18;
-        ring.style.left = ringX + 'px';
-        ring.style.top = ringY + 'px';
-        requestAnimationFrame(animarAnillo);
-    })();
-    const selectorInteractivo = 'a, button, input[type="text"], textarea, .sugerencia-item, summary, details';
-    document.addEventListener('mouseover', function(e) {
-        var el = e.target.closest ? e.target.closest(selectorInteractivo) : null;
-        if (!el) return;
-        var esTexto = el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text');
-        if (esTexto) {
-            ring.style.width = '4px'; ring.style.height = '26px'; ring.style.borderRadius = '2px';
-            ring.style.borderColor = 'rgba(16, 185, 129, 0.9)'; ring.style.background = 'transparent';
-        } else {
-            ring.style.width = '52px'; ring.style.height = '52px'; ring.style.borderRadius = '50%';
-            ring.style.borderColor = 'rgba(52, 211, 153, 0.85)';
-            ring.style.background = 'rgba(16, 185, 129, 0.08)';
+            <div class="tab-content" id="tab-constructor">
+                <div class="seccion glass">
+                    <h2><span class="icon icon-grid" aria-hidden="true"></span> {{ t.constructor_titulo }}</h2>
+                    <p>{{ t.constructor_desc }}</p>
+                    <p class="puntaje" style="font-size: 1.2rem; color: var(--primary-color);">{{ t.texto_puntaje }}: <span id="puntaje-constructor">0 / 0</span></p>
+                    <p><strong>{{ t.constructor_pool }}</strong></p>
+                    <div id="piezas-pool" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--border-light); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(0,0,0,0.2);" role="group" aria-label="Piezas disponibles para construir la cita"></div>
+                    <p><strong>{{ t.constructor_zona }}</strong></p>
+                    <div id="zona-respuesta" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--primary-color); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(16,185,129,0.05);" role="group" aria-label="Tu cita en construcción"></div>
+                    <button type="button" class="accion" id="btnVerificarConstructor">{{ t.constructor_verificar }}</button>
+                    <button type="button" class="accion" id="btnSiguienteConstructor" style="background:#334155; color:white;">{{ t.constructor_siguiente }}</button>
+                    <div id="resultado-constructor" style="margin-top:20px;" role="status" aria-live="polite"></div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="tab-biblio">
+                <div class="seccion glass">
+                    <h2><span class="icon icon-star" aria-hidden="true"></span> {{ t.biblio_titulo }}</h2>
+                    <p>{{ t.biblio_desc }}</p>
+                    <div id="biblio-container" style="margin-top: 20px;"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+    // ===== ICONOS SVG con aria-hidden =====
+    function iconoSvg(nombre) {
+        return '<span class="icon icon-' + nombre + '" aria-hidden="true"></span>';
+    }
+
+    // ===== TOAST ACCESIBLE (reemplaza alert()) =====
+    function mostrarToast(msg, tipo) {
+        var t = document.getElementById('toast');
+        if (t) {
+            t.textContent = msg;
         }
+        var toastVis = document.getElementById('toast-visual');
+        if (toastVis) {
+            toastVis.textContent = msg;
+            toastVis.className = '';
+            if (tipo === 'warning') toastVis.classList.add('warning');
+            else if (tipo === 'error') toastVis.classList.add('error');
+            toastVis.style.display = 'block';
+            clearTimeout(toastVis._timer);
+            toastVis._timer = setTimeout(function() {
+                toastVis.style.display = 'none';
+            }, 4000);
+        }
+    }
+
+    // ===== NAVEGACIÓN =====
+    function mostrarTab(nombre) {
+        document.querySelectorAll('.tab-content').forEach(function(el) { el.classList.remove('active'); });
+        document.querySelectorAll('.nav-boton').forEach(function(el) { el.classList.remove('activo'); });
+        var el = document.getElementById('tab-' + nombre);
+        if (el) el.classList.add('active');
+        var nav = document.getElementById('nav-' + nombre);
+        if (nav) nav.classList.add('activo');
+        localStorage.setItem('tabActiva', nombre);
+        if (nombre === 'biblio') cargarBibliografia();
+        if (nombre === 'constructor' && !window.juegoIniciado) { cargarCitaJuego(0); window.juegoIniciado = true; }
+    }
+
+    document.querySelectorAll('.nav-boton').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            mostrarTab(btn.dataset.tab);
+        });
     });
-    document.addEventListener('mouseout', function(e) {
-        var el = e.target.closest ? e.target.closest(selectorInteractivo) : null;
-        if (!el) return;
-        ring.style.width = '30px'; ring.style.height = '30px'; ring.style.borderRadius = '50%';
-        ring.style.borderColor = 'rgba(16, 185, 129, 0.5)'; ring.style.background = 'transparent';
-    });
-})();
 
-// ========== EFECTO DE SEGUIMIENTO DE MOUSE EN BOTONES DE NAV (glow que sigue el cursor) ==========
-document.querySelectorAll('.nav-boton').forEach(function(btn) {
-    btn.addEventListener('mousemove', function(e) {
-        var r = btn.getBoundingClientRect();
-        btn.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100) + '%');
-        btn.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100) + '%');
-    });
-});
+    var tabInicial = localStorage.getItem('tabActiva') || '{{ tab_activa }}';
+    mostrarTab(tabInicial);
 
-// ========== UTILIDAD: escape HTML (previene XSS al insertar datos de APIs externas via innerHTML) ==========
-function escaparHtml(texto) {
-    if (texto === null || texto === undefined) return '';
-    var div = document.createElement('div');
-    div.textContent = String(texto);
-    return div.innerHTML;
-}
+    // ===== MODAL PDF con foco y Escape =====
+    var ultimoFoco = null;
 
-function iconoSvg(nombre) {
-    return '<span class="icon icon-' + nombre + '"></span>';
-}
+    function previsualizarPdf(urlOriginal) {
+        var modal = document.getElementById('modalPdf');
+        var iframe = document.getElementById('iframePdf');
+        var cargando = document.getElementById('modalCargando');
+        var error = document.getElementById('modalError');
+        var abrirExterno = document.getElementById('modalAbrirExterno');
 
-// ========== NAVEGACIÓN ==========
-function mostrarTab(nombre) {
-    document.querySelectorAll('.tab-content').forEach(function(el) { el.classList.remove('active'); });
-    document.querySelectorAll('.nav-boton').forEach(function(el) { el.classList.remove('activo'); });
-    var el = document.getElementById('tab-' + nombre);
-    if (el) el.classList.add('active');
-    var nav = document.getElementById('nav-' + nombre);
-    if (nav) nav.classList.add('activo');
-    localStorage.setItem('tabActiva', nombre);
-    if (nombre === 'biblio') cargarBibliografia();
-    if (nombre === 'constructor' && !window.juegoIniciado) { cargarCitaJuego(0); window.juegoIniciado = true; }
-}
+        ultimoFoco = document.activeElement;
 
-document.querySelectorAll('.nav-boton').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-        mostrarTab(btn.dataset.tab);
-    });
-});
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-modal', 'true');
+        modal.setAttribute('aria-label', 'Vista previa del documento PDF');
 
-var tabInicial = localStorage.getItem('tabActiva') || '{{ tab_activa }}';
-mostrarTab(tabInicial);
+        abrirExterno.href = urlOriginal;
+        error.classList.add('oculto');
+        cargando.classList.remove('oculto');
+        iframe.style.visibility = 'hidden';
+        modal.classList.add('active');
 
-// ========== MODAL PDF (usa el proxy /api/preview-pdf para evitar que el navegador
-// fuerce la descarga en vez de mostrar el documento incrustado) ==========
-function previsualizarPdf(urlOriginal) {
-    var modal = document.getElementById('modalPdf');
-    var iframe = document.getElementById('iframePdf');
-    var cargando = document.getElementById('modalCargando');
-    var error = document.getElementById('modalError');
-    var abrirExterno = document.getElementById('modalAbrirExterno');
+        setTimeout(function() {
+            document.getElementById('btnCerrarModal').focus();
+        }, 100);
 
-    abrirExterno.href = urlOriginal;
-    error.classList.add('oculto');
-    cargando.classList.remove('oculto');
-    iframe.style.visibility = 'hidden';
-    modal.classList.add('active');
+        var urlProxy = '/api/preview-pdf?url=' + encodeURIComponent(urlOriginal);
 
-    var urlProxy = '/api/preview-pdf?url=' + encodeURIComponent(urlOriginal);
-
-    // Verificamos primero con HEAD/GET liviano si el proxy puede servir el PDF;
-    // si falla (no es PDF, bloqueado, red interna, etc.) mostramos el estado de error
-    // en vez de dejar un iframe roto.
-    fetch(urlProxy, { method: 'GET' }).then(function(resp) {
-        if (!resp.ok) throw new Error('preview_failed');
-        cargando.classList.add('oculto');
-        iframe.src = urlProxy;
-        iframe.style.visibility = 'visible';
-    }).catch(function() {
-        cargando.classList.add('oculto');
-        error.classList.remove('oculto');
-    });
-}
-function cerrarModal() {
-    document.getElementById('modalPdf').classList.remove('active');
-    document.getElementById('iframePdf').src = 'about:blank';
-}
-document.getElementById('btnCerrarModal').addEventListener('click', cerrarModal);
-document.getElementById('modalPdf').addEventListener('click', function(e) {
-    if (e.target === document.getElementById('modalPdf')) cerrarModal();
-});
-
-// ========== LOADER INTERACTIVO CANVAS (particulas vectoriales, no emoji) ==========
-function iniciarLoader() {
-    var canvas = document.getElementById('loaderCanvas');
-    if (!canvas) return;
-    var ctx = canvas.getContext('2d');
-    var container = document.getElementById('loaderContainer');
-    var W = container.offsetWidth;
-    var H = 200;
-    canvas.width = W; canvas.height = H;
-
-    var particulas = [];
-    for (var i = 0; i < 22; i++) {
-        particulas.push({
-            x: Math.random() * W, y: Math.random() * H,
-            vx: (Math.random() - 0.5) * 1.2, vy: (Math.random() - 0.5) * 1.2,
-            r: 2 + Math.random() * 3,
-            alpha: 0.25 + Math.random() * 0.5
+        fetch(urlProxy, { method: 'GET' }).then(function(resp) {
+            if (!resp.ok) throw new Error('preview_failed');
+            cargando.classList.add('oculto');
+            iframe.src = urlProxy;
+            iframe.style.visibility = 'visible';
+        }).catch(function() {
+            cargando.classList.add('oculto');
+            error.classList.remove('oculto');
+            document.getElementById('modalAbrirExterno').focus();
         });
     }
 
-    var frases = [
-        "Desempolvando repositorios...",
-        "Consultando bases académicas...",
-        "Conectando con universidades...",
-        "Analizando metadatos...",
-        "Buscando PDFs de acceso abierto...",
-        "Verificando DOIs...",
-        "Traduciendo títulos...",
-        "Ordenando resultados..."
-    ];
-    var fraseIdx = 0;
-    var intervaloFrase = setInterval(function() {
-        var txt = document.getElementById('loaderTexto');
-        if (!txt || !document.getElementById('loaderContainer').classList.contains('active')) {
-            clearInterval(intervaloFrase);
+    function cerrarModal() {
+        document.getElementById('modalPdf').classList.remove('active');
+        document.getElementById('iframePdf').src = 'about:blank';
+        if (ultimoFoco) {
+            ultimoFoco.focus();
+            ultimoFoco = null;
+        }
+    }
+
+    document.getElementById('btnCerrarModal').addEventListener('click', cerrarModal);
+    document.getElementById('modalPdf').addEventListener('click', function(e) {
+        if (e.target === document.getElementById('modalPdf')) cerrarModal();
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && document.getElementById('modalPdf').classList.contains('active')) {
+            cerrarModal();
+        }
+    });
+
+    document.getElementById('modalPdf').addEventListener('keydown', function(e) {
+    if (e.key !== 'Tab') return;
+    var focoseables = this.querySelectorAll('button, a[href], iframe');
+    if (!focoseables.length) return;
+    var primero = focoseables[0];
+    var ultimo = focoseables[focoseables.length - 1];
+    if (e.shiftKey && document.activeElement === primero) {
+        e.preventDefault();
+        ultimo.focus();
+    } else if (!e.shiftKey && document.activeElement === ultimo) {
+        e.preventDefault();
+        primero.focus();
+    }
+});
+
+    // ===== LOADER del buscador con reduced-motion =====
+    function iniciarLoader() {
+        var prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        var canvas = document.getElementById('loaderCanvas');
+        var container = document.getElementById('loaderContainer');
+        if (!canvas || !container) return;
+
+        if (prefersReducedMotion) {
+            canvas.style.display = 'none';
+            document.getElementById('loaderTexto').textContent = '{{ t.loader_buscando }}';
             return;
         }
-        fraseIdx = (fraseIdx + 1) % frases.length;
-        txt.textContent = frases[fraseIdx];
-    }, 2000);
 
-    function distancia(a, b) { var dx = a.x-b.x, dy = a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
+        canvas.style.display = 'block';
+        var ctx = canvas.getContext('2d');
+        var W = container.offsetWidth;
+        var H = 200;
+        canvas.width = W; canvas.height = H;
 
-    function animar() {
-        if (!document.getElementById('loaderContainer').classList.contains('active')) return;
-        ctx.clearRect(0, 0, W, H);
-        particulas.forEach(function(p) {
-            p.x += p.vx; p.y += p.vy;
-            if (p.x < 0 || p.x > W) p.vx *= -1;
-            if (p.y < 0 || p.y > H) p.vy *= -1;
-        });
-        // lineas de conexion (efecto "red académica")
-        ctx.strokeStyle = 'rgba(16,185,129,0.15)';
-        ctx.lineWidth = 1;
-        for (var i = 0; i < particulas.length; i++) {
-            for (var j = i + 1; j < particulas.length; j++) {
-                if (distancia(particulas[i], particulas[j]) < 90) {
-                    ctx.beginPath();
-                    ctx.moveTo(particulas[i].x, particulas[i].y);
-                    ctx.lineTo(particulas[j].x, particulas[j].y);
-                    ctx.stroke();
-                }
-            }
+        var particulas = [];
+        for (var i = 0; i < 22; i++) {
+            particulas.push({
+                x: Math.random() * W, y: Math.random() * H,
+                vx: (Math.random() - 0.5) * 1.2, vy: (Math.random() - 0.5) * 1.2,
+                r: 2 + Math.random() * 3,
+                alpha: 0.25 + Math.random() * 0.5
+            });
         }
-        particulas.forEach(function(p) {
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(16,185,129,' + p.alpha + ')';
-            ctx.fill();
-        });
-        requestAnimationFrame(animar);
-    }
-    animar();
-}
 
-// ========== BÚSQUEDA (AJAX): crea tarjetas, muestra/oculta el loader según el estado real ==========
-function crearTarjetaResultado(p) {
-    var div = document.createElement('div');
-    div.className = 'tarjeta';
-    div.dataset.pdf = p.pdf_gratis ? '1' : '0';
-    div.dataset.espanol = p.en_espanol ? '1' : '0';
-    div.dataset.anio = p.año || 0;
-    div.dataset.repo = p.tipo === 'repositorio' ? '1' : '0';
-
-    var titulo = escaparHtml(p.titulo || 'Sin título');
-    var autores = escaparHtml(p.autores || 'Anon.');
-    var anio = escaparHtml(p.año || 's.f.');
-    var fuente = escaparHtml(p.fuente || 'Fuente');
-    var region = p.region ? escaparHtml(p.region) : '';
-    var enlace = (p.enlace && p.enlace !== '#') ? encodeURI(p.enlace) : '';
-    var pdfUrl = p.pdf_gratis ? encodeURI(p.pdf_gratis) : '';
-
-    var html = '<span class="badge-fuente">' + fuente + '</span>';
-    if (region) html += '<span class="badge-region">' + region + '</span>';
-    if (p.en_espanol) html += '<span class="badge-es">{{ t.papel_en_espanol }}</span>';
-    if (p.pdf_gratis) html += '<span class="badge-pdf">' + iconoSvg('download') + ' PDF</span>';
-    html += '<a href="' + (enlace || '#') + '" target="_blank" rel="noopener" class="titulo-clickable">' + titulo + '</a>';
-    html += '<p>' + autores + ' (' + anio + ')</p>';
-    html += '<div class="enlaces-paper">';
-    if (enlace) html += '<a class="enlace-web" href="' + enlace + '" target="_blank" rel="noopener">' + iconoSvg('globe') + ' {{ t.papel_pagina_web }}</a>';
-    if (pdfUrl) {
-        html += '<a class="enlace-pdf" href="' + pdfUrl + '" target="_blank" rel="noopener">' + iconoSvg('download') + ' {{ t.papel_pdf }}</a>';
-        html += '<button type="button" class="enlace-preview" data-pdf-url="' + encodeURIComponent(p.pdf_gratis) + '">' + iconoSvg('eye') + ' {{ t.papel_previsualizar }}</button>';
-    }
-    html += '<button type="button" class="guardar-btn" style="background: var(--warning); color: #0B1120; border: none; padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: none;" data-titulo="' + encodeURIComponent(p.titulo || '') + '" data-autores="' + encodeURIComponent(p.autores || '') + '" data-anio="' + (p.año || '') + '" data-doi="' + (p.doi || '') + '" data-enlace="' + encodeURIComponent(p.enlace || '') + '">' + iconoSvg('star') + ' {{ t.guardar_boton }}</button>';
-    html += '</div>';
-    html += '<details style="margin-top:15px; background:rgba(0,0,0,0.2); padding:12px; border-radius:8px; border:1px solid var(--border-light);">';
-    html += '<summary style="cursor:none; color:var(--primary-color); font-weight:600; font-size:0.9rem;">' + iconoSvg('file') + ' {{ t.cita_ver_desplegable }}</summary>';
-    html += '<div style="margin-top:10px; font-size:0.85rem;">';
-    var formatos = [
-        {id:'apa', label:'{{ t.cita_apa_label }}', val:p.cita_apa},
-        {id:'vancouver', label:'{{ t.cita_vancouver_label }}', val:p.cita_vancouver},
-        {id:'ieee', label:'{{ t.cita_ieee_label }}', val:p.cita_ieee},
-        {id:'mla', label:'{{ t.cita_mla_label }}', val:p.cita_mla}
-    ];
-    formatos.forEach(function(fmt) {
-        if (fmt.val) {
-            var valEsc = escaparHtml(fmt.val);
-            html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;"><strong style="color:var(--primary-color);">' + fmt.label + '</strong>';
-            html += '<button type="button" class="copiar-btn" data-cita="' + encodeURIComponent(fmt.val) + '" style="background:var(--primary-color); color:#0B1120; border:none; padding:4px 10px; border-radius:4px; font-size:0.75rem; font-weight:bold; cursor:none; display:inline-flex; align-items:center; gap:4px;">' + iconoSvg('copy') + ' {{ t.copiar_boton }}</button></div>';
-            html += '<p style="margin:0 0 10px 0; word-break:break-word; opacity:0.9; border-left:2px solid var(--border-light); padding-left:8px;">' + valEsc + '</p>';
-        }
-    });
-    html += '</div></details>';
-    div.innerHTML = html;
-    return div;
-}
-
-function actualizarBuscarTambien(tema) {
-    var cont = document.getElementById('buscar-tambien-links');
-    var q = encodeURIComponent(tema);
-    cont.innerHTML = '<span>{{ t.buscar_tambien }}:</span>' +
-        '<a href="https://scholar.google.com/scholar?q=' + q + '" target="_blank" rel="noopener">Google Scholar</a>' +
-        '<a href="https://www.semanticscholar.org/search?q=' + q + '" target="_blank" rel="noopener">Semantic Scholar</a>' +
-        '<a href="https://pubmed.ncbi.nlm.nih.gov/?term=' + q + '" target="_blank" rel="noopener">PubMed</a>' +
-        '<a href="https://core.ac.uk/search?q=' + q + '" target="_blank" rel="noopener">CORE</a>' +
-        '<a href="https://www.researchgate.net/search/publication?q=' + q + '" target="_blank" rel="noopener">ResearchGate</a>';
-}
-
-function renderizarResultadosBusqueda(tema, papers) {
-    var gridPdf = document.getElementById('grid-pdf');
-    var gridAcad = document.getElementById('grid-academico');
-    var gridRepos = document.getElementById('grid-repos');
-    var seccionPdf = document.getElementById('seccion-pdf');
-    var seccionAcad = document.getElementById('seccion-academico');
-    var seccionRepos = document.getElementById('seccion-repos');
-
-    gridPdf.innerHTML = ''; gridAcad.innerHTML = ''; gridRepos.innerHTML = '';
-    document.getElementById('resultados-para-tema').textContent = '"' + tema + '"';
-
-    papers.forEach(function(p) {
-        var card = crearTarjetaResultado(p);
-        if (p.pdf_gratis) {
-            gridPdf.appendChild(card);
-        } else if (p.tipo === 'repositorio') {
-            gridRepos.appendChild(card);
-        } else {
-            gridAcad.appendChild(card);
-        }
-    });
-
-    seccionPdf.style.display = gridPdf.children.length ? 'block' : 'none';
-    seccionAcad.style.display = gridAcad.children.length ? 'block' : 'none';
-    seccionRepos.style.display = gridRepos.children.length ? 'block' : 'none';
-
-    actualizarBuscarTambien(tema);
-
-    document.querySelectorAll('.filtro-btn').forEach(function(b) { b.classList.remove('activo'); });
-    var btnTodos = document.querySelector('.filtro-btn[data-filtro="todos"]');
-    if (btnTodos) btnTodos.classList.add('activo');
-
-    window.filtrarResultados = function(tipo, btn) {
-        document.querySelectorAll('.filtro-btn').forEach(function(b) { b.classList.remove('activo'); });
-        btn.classList.add('activo');
-        var cards = document.querySelectorAll('.tarjeta');
-        var anioLimite = new Date().getFullYear() - 5;
-        cards.forEach(function(card) {
-            var mostrar = true;
-            if (tipo === 'pdf' && card.dataset.pdf !== '1') mostrar = false;
-            if (tipo === 'espanol' && card.dataset.espanol !== '1') mostrar = false;
-            if (tipo === 'reciente') {
-                var a = parseInt(card.dataset.anio);
-                if (!a || a < anioLimite) mostrar = false;
-            }
-            if (tipo === 'repositorio' && card.dataset.repo !== '1') mostrar = false;
-            card.style.display = mostrar ? 'block' : 'none';
-        });
-        ['grid-pdf','grid-academico','grid-repos'].forEach(function(id, i) {
-            var g = document.getElementById(id);
-            var vis = Array.from(g.children).some(function(c) { return c.style.display !== 'none'; });
-            var secs = [seccionPdf, seccionAcad, seccionRepos];
-            secs[i].style.display = vis ? 'block' : 'none';
-        });
-    };
-
-    document.getElementById('resultados-buscar-wrapper').style.display = 'block';
-    document.getElementById('buscar-sin-resultados').style.display = 'none';
-}
-
-function mostrarLoaderBusqueda() {
-    document.getElementById('resultados-buscar-wrapper').style.display = 'none';
-    document.getElementById('buscar-sin-resultados').style.display = 'none';
-    document.getElementById('buscar-error').style.display = 'none';
-    document.getElementById('loaderContainer').classList.add('active');
-    document.getElementById('skeleton-container').style.display = 'grid';
-    iniciarLoader();
-}
-
-function ocultarLoaderBusqueda() {
-    document.getElementById('loaderContainer').classList.remove('active');
-    document.getElementById('skeleton-container').style.display = 'none';
-}
-
-var buscarForm = document.getElementById('buscar-form');
-if (buscarForm) {
-    buscarForm.addEventListener('submit', function(e) {
-        e.preventDefault();
-        var tema = document.getElementById('search-input').value.trim();
-        if (!tema) return;
-        var btn = document.getElementById('btn-buscar-submit');
-        btn.disabled = true;
-        mostrarLoaderBusqueda();
-        fetch('/api/buscar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'tema=' + encodeURIComponent(tema)
-        }).then(function(resp) {
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            return resp.json();
-        }).then(function(data) {
-            ocultarLoaderBusqueda();
-            btn.disabled = false;
-            if (!data.papers || data.papers.length === 0) {
-                document.getElementById('buscar-sin-resultados').style.display = 'block';
+        var frases = [
+            "Desempolvando repositorios...",
+            "Consultando bases académicas...",
+            "Conectando con universidades...",
+            "Analizando metadatos...",
+            "Buscando PDFs de acceso abierto...",
+            "Verificando DOIs...",
+            "Traduciendo títulos...",
+            "Ordenando resultados..."
+        ];
+        var fraseIdx = 0;
+        var intervaloFrase = setInterval(function() {
+            var txt = document.getElementById('loaderTexto');
+            if (!txt || !document.getElementById('loaderContainer').classList.contains('active')) {
+                clearInterval(intervaloFrase);
                 return;
             }
-            renderizarResultadosBusqueda(data.tema, data.papers);
-        }).catch(function(err) {
-            console.error('Error en la búsqueda:', err);
-            ocultarLoaderBusqueda();
-            btn.disabled = false;
-            document.getElementById('buscar-error').style.display = 'block';
-        });
-    });
-}
+            fraseIdx = (fraseIdx + 1) % frases.length;
+            txt.textContent = frases[fraseIdx];
+        }, 2000);
 
-// Si la pagina llego con resultados ya calculados en el servidor (recarga completa / fallback sin JS previo), pintarlos ya
-(function() {
-    var datosEl = document.getElementById('datos-papers');
-    if (!datosEl) return;
-    try {
-        var inicial = JSON.parse(datosEl.textContent);
-        ocultarLoaderBusqueda();
-        if (inicial.papers && inicial.papers.length) {
-            renderizarResultadosBusqueda(inicial.tema, inicial.papers);
-        } else {
-            document.getElementById('buscar-sin-resultados').style.display = 'block';
+        function distancia(a, b) { var dx = a.x-b.x, dy = a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
+
+        function animar() {
+            if (!document.getElementById('loaderContainer').classList.contains('active')) return;
+            ctx.clearRect(0, 0, W, H);
+            particulas.forEach(function(p) {
+                p.x += p.vx; p.y += p.vy;
+                if (p.x < 0 || p.x > W) p.vx *= -1;
+                if (p.y < 0 || p.y > H) p.vy *= -1;
+            });
+            ctx.strokeStyle = 'rgba(16,185,129,0.15)';
+            ctx.lineWidth = 1;
+            for (var i = 0; i < particulas.length; i++) {
+                for (var j = i + 1; j < particulas.length; j++) {
+                    if (distancia(particulas[i], particulas[j]) < 90) {
+                        ctx.beginPath();
+                        ctx.moveTo(particulas[i].x, particulas[i].y);
+                        ctx.lineTo(particulas[j].x, particulas[j].y);
+                        ctx.stroke();
+                    }
+                }
+            }
+            particulas.forEach(function(p) {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(16,185,129,' + p.alpha + ')';
+                ctx.fill();
+            });
+            requestAnimationFrame(animar);
         }
-    } catch (err) {
-        console.error('Error al cargar resultados iniciales:', err);
+        animar();
     }
-})();
 
-// ========== AUTOCOMPLETE ==========
-var searchInput = document.getElementById('search-input');
-var suggestionsBox = document.getElementById('suggestions-dropdown');
+    // ===== CREAR TARJETA DE RESULTADO =====
+    function crearTarjetaResultado(p) {
+        var div = document.createElement('div');
+        div.className = 'tarjeta';
+        div.dataset.pdf = p.pdf_gratis ? '1' : '0';
+        div.dataset.espanol = p.en_espanol ? '1' : '0';
+        div.dataset.anio = p.año || 0;
+        div.dataset.repo = p.tipo === 'repositorio' ? '1' : '0';
 
-function debounce(fn, delay) {
-    var timer;
-    return function () {
-        var args = arguments;
-        clearTimeout(timer);
-        timer = setTimeout(function() { fn.apply(null, args); }, delay);
-    };
-}
+        var titulo = escaparHtml(p.titulo || 'Sin título');
+        var autores = escaparHtml(p.autores || 'Anon.');
+        var anio = escaparHtml(p.año || 's.f.');
+        var fuente = escaparHtml(p.fuente || 'Fuente');
+        var region = p.region ? escaparHtml(p.region) : '';
+        var enlace = (p.enlace && p.enlace !== '#') ? encodeURI(p.enlace) : '';
+        var pdfUrl = p.pdf_gratis ? encodeURI(p.pdf_gratis) : '';
 
-async function fetchSugerencias(query) {
-    try {
-        var resp = await fetch('/api/suggest-tema?tema=' + encodeURIComponent(query));
-        if (!resp.ok) return [];
-        return await resp.json();
-    } catch (e) { return []; }
-}
-
-function mostrarSugerencias(lista) {
-    suggestionsBox.innerHTML = '';
-    if (lista.length === 0) { suggestionsBox.style.display = 'none'; return; }
-    suggestionsBox.innerHTML = lista.map(function(item) {
-        var anio = item.año ? ' (' + escaparHtml(item.año) + ')' : '';
-        return '<div class="sugerencia-item" data-valor="' + escaparHtml(item.titulo) + '">' + iconoSvg('doc-mini') + '<span>' + escaparHtml(item.titulo) + anio + '</span></div>';
-    }).join('');
-    suggestionsBox.style.display = 'block';
-    document.querySelectorAll('.sugerencia-item').forEach(function(el) {
-        el.addEventListener('click', function() {
-            searchInput.value = el.dataset.valor;
-            suggestionsBox.style.display = 'none';
-        });
-    });
-}
-
-if (searchInput) {
-    var debouncedInput = debounce(async function() {
-        var q = searchInput.value.trim();
-        if (q.length < 3) { suggestionsBox.style.display = 'none'; return; }
-        mostrarSugerencias(await fetchSugerencias(q));
-    }, 300);
-    searchInput.addEventListener('input', debouncedInput);
-    document.addEventListener('click', function(e) {
-        if (!searchInput.contains(e.target) && !suggestionsBox.contains(e.target)) {
-            suggestionsBox.style.display = 'none';
+        var html = '<span class="badge-fuente">' + fuente + '</span>';
+        if (region) html += '<span class="badge-region">' + region + '</span>';
+        if (p.en_espanol) html += '<span class="badge-es">{{ t.papel_en_espanol }}</span>';
+        if (p.pdf_gratis) html += '<span class="badge-pdf">' + iconoSvg('download') + ' PDF</span>';
+        html += '<a href="' + (enlace || '#') + '" target="_blank" rel="noopener" class="titulo-clickable">' + titulo + '</a>';
+        html += '<p>' + autores + ' (' + anio + ')</p>';
+        html += '<div class="enlaces-paper">';
+        if (enlace) html += '<a class="enlace-web" href="' + enlace + '" target="_blank" rel="noopener">' + iconoSvg('globe') + ' {{ t.papel_pagina_web }}</a>';
+        if (pdfUrl) {
+            html += '<a class="enlace-pdf" href="' + pdfUrl + '" target="_blank" rel="noopener">' + iconoSvg('download') + ' {{ t.papel_pdf }}</a>';
+            html += '<button type="button" class="enlace-preview" data-pdf-url="' + encodeURIComponent(p.pdf_gratis) + '">' + iconoSvg('eye') + ' {{ t.papel_previsualizar }}</button>';
         }
-    });
-}
-
-// ========== UTILIDADES ==========
-function usarCitaCorregida(original, corregida) {
-    var textarea = document.querySelector('textarea[name="cita"]');
-    if (!textarea) return;
-    var lineas = textarea.value.split('\n');
-    var nuevas = lineas.map(function(l) { return l.trim() === original ? corregida : l; });
-    textarea.value = nuevas.join('\n');
-    textarea.focus();
-}
-
-function copiarTexto(btn, texto) {
-    navigator.clipboard.writeText(texto).then(function() {
-        var originalHtml = btn.innerHTML;
-        btn.innerHTML = iconoSvg('check');
-        setTimeout(function() { btn.innerHTML = originalHtml; }, 2000);
-    });
-}
-
-function generarCitaJS(paper, formato) {
-    var autores = paper.autores || "Anon.";
-    var anio = paper.año || "s.f.";
-    var titulo = paper.titulo || "Sin título";
-    var doi = paper.doi || "";
-    var enlace = paper.enlace || "";
-    if (formato === "apa") {
-        return doi && doi !== "sin DOI" ? autores + " (" + anio + "). " + titulo + ". https://doi.org/" + doi : autores + " (" + anio + "). " + titulo + ". " + enlace;
-    } else if (formato === "vancouver") {
-        return doi && doi !== "sin DOI" ? autores + ". " + titulo + ". " + anio + ". doi:" + doi : autores + ". " + titulo + ". " + anio + ". Disponible en: " + enlace;
-    } else if (formato === "ieee") {
-        return doi && doi !== "sin DOI" ? autores + ', "' + titulo + '," ' + anio + ". doi: " + doi + "." : autores + ', "' + titulo + '," ' + anio + ". [Online]. Available: " + enlace;
-    } else if (formato === "mla") {
-        return doi && doi !== "sin DOI" ? autores + '. "' + titulo + '." (' + anio + "). doi:" + doi + "." : autores + '. "' + titulo + '." ' + anio + ", " + enlace + ".";
-    }
-    return "";
-}
-
-function guardarReferencia(btn, paper) {
-    var refs = JSON.parse(localStorage.getItem('userBiblio') || '[]');
-    if (refs.some(function(r) { return r.titulo === paper.titulo; })) {
-        alert("Esta referencia ya está en tu bibliografía.");
-        return;
-    }
-    refs.push(paper);
-    localStorage.setItem('userBiblio', JSON.stringify(refs));
-    btn.style.background = '#10B981';
-    btn.innerHTML = iconoSvg('check') + ' Guardado';
-    setTimeout(function() {
-        btn.style.background = '#F59E0B';
-        btn.innerHTML = iconoSvg('star') + ' {{ t.guardar_boton }}';
-    }, 2000);
-}
-
-function cargarBibliografia() {
-    var container = document.getElementById('biblio-container');
-    if (!container) return;
-    var refs = JSON.parse(localStorage.getItem('userBiblio') || '[]');
-    if (refs.length === 0) {
-        container.innerHTML = "<p style='opacity: 0.7; text-align: center; padding: 20px;'>{{ t.biblio_vacia }}</p>";
-        return;
-    }
-    var formatos = [
-        { id: 'apa', nombre: '{{ t.cita_apa_label }}' },
-        { id: 'vancouver', nombre: '{{ t.cita_vancouver_label }}' },
-        { id: 'ieee', nombre: '{{ t.cita_ieee_label }}' },
-        { id: 'mla', nombre: '{{ t.cita_mla_label }}' }
-    ];
-    var html = '<div style="display: grid; gap: 20px;">';
-    formatos.forEach(function(fmt) {
-        html += '<div class="tarjeta" style="background: rgba(255,255,255,0.05);">';
-        html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border-light); padding-bottom: 10px;">';
-        html += '<h3 style="margin: 0; color: var(--primary-color);">' + fmt.nombre + '</h3>';
-        html += '<button type="button" class="copiar-todo-btn" data-formato="' + fmt.id + '" style="background: var(--primary-color); color: #0B1120; border: none; padding: 8px 15px; border-radius: 6px; font-weight: bold; cursor: none; display:inline-flex; align-items:center; gap:6px;">' + iconoSvg('copy') + ' {{ t.copiar_todo }}</button>';
+        html += '<button type="button" class="guardar-btn" style="background: var(--warning); color: #0B1120; border: none; padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;" data-titulo="' + encodeURIComponent(p.titulo || '') + '" data-autores="' + encodeURIComponent(p.autores || '') + '" data-anio="' + (p.año || '') + '" data-doi="' + (p.doi || '') + '" data-enlace="' + encodeURIComponent(p.enlace || '') + '">' + iconoSvg('star') + ' {{ t.guardar_boton }}</button>';
         html += '</div>';
-        refs.forEach(function(paper, index) {
-            var cita = escaparHtml(generarCitaJS(paper, fmt.id));
-            html += '<p style="margin: 0 0 12px 0; word-break: break-word; opacity: 0.9; border-left: 2px solid var(--border-light); padding-left: 10px;">' + (index + 1) + '. ' + cita + '</p>';
+        html += '<details style="margin-top:15px; background:rgba(0,0,0,0.2); padding:12px; border-radius:8px; border:1px solid var(--border-light);">';
+        html += '<summary style="cursor:pointer; color:var(--primary-color); font-weight:600; font-size:0.9rem;">' + iconoSvg('file') + ' {{ t.cita_ver_desplegable }}</summary>';
+        html += '<div style="margin-top:10px; font-size:0.85rem;">';
+        var formatos = [
+            {id:'apa', label:'{{ t.cita_apa_label }}', val:p.cita_apa},
+            {id:'vancouver', label:'{{ t.cita_vancouver_label }}', val:p.cita_vancouver},
+            {id:'ieee', label:'{{ t.cita_ieee_label }}', val:p.cita_ieee},
+            {id:'mla', label:'{{ t.cita_mla_label }}', val:p.cita_mla}
+        ];
+        formatos.forEach(function(fmt) {
+            if (fmt.val) {
+                var valEsc = escaparHtml(fmt.val);
+                html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;"><strong style="color:var(--primary-color);">' + fmt.label + '</strong>';
+                html += '<button type="button" class="copiar-btn" data-cita="' + encodeURIComponent(fmt.val) + '" style="background:var(--primary-color); color:#0B1120; border:none; padding:4px 10px; border-radius:4px; font-size:0.75rem; font-weight:bold; cursor:pointer; display:inline-flex; align-items:center; gap:4px;">' + iconoSvg('copy') + ' {{ t.copiar_boton }}</button></div>';
+                html += '<p style="margin:0 0 10px 0; word-break:break-word; opacity:0.9; border-left:2px solid var(--border-light); padding-left:8px;">' + valEsc + '</p>';
+            }
         });
-        html += '</div>';
-    });
-    html += '</div>';
-    container.innerHTML = html;
-}
-
-function copiarTodo(formato) {
-    var refs = JSON.parse(localStorage.getItem('userBiblio') || '[]');
-    var texto = refs.map(function(paper, index) {
-        return (index + 1) + ". " + generarCitaJS(paper, formato);
-    }).join('\n\n');
-    navigator.clipboard.writeText(texto).then(function() {
-        alert("Bibliografía copiada al portapapeles!");
-    });
-}
-
-// ========== CONSTRUCTOR DE CITAS ==========
-var citasJuego = [
-    { piezas: ["García, J. A.", "(2021).", "Efecto de la temperatura en la oxidación de aceites vegetales.", "Revista de Ciencia de los Alimentos,", "15(3),", "45-58."] },
-    { piezas: ["López, M., & Pérez, R.", "(2019).", "Análisis del índice de peróxidos en aceite de oliva.", "Grasas y Aceites,", "70(2),", "112-120."] },
-    { piezas: ["UNESCO.", "(2023).", "Alfabetización mediática e informacional para la era digital.", "Ediciones UNESCO,", "1(1),", "10-25."] },
-    { piezas: ["Smith, J.", "(2022).", "Impacto de la inteligencia artificial en la educación superior.", "Journal of EdTech,", "8(4),", "112-128."] },
-    { piezas: ["Chen, L.", "(2020).", "Desarrollo de vacunas de ARNm frente a pandemias globales.", "Nature Medicine,", "26(5),", "450-460."] },
-    { piezas: ["Torres, A.", "(2018).", "Sostenibilidad y energías renovables en zonas rurales.", "Revista de Ingeniería Ambiental,", "12(1),", "33-41."] }
-];
-var citaActual = 0;
-var piezasDisponibles = [];
-var respuestaUsuario = [];
-
-function barajar(arr) {
-    var c = arr.slice();
-    for (var i = c.length - 1; i > 0; i--) {
-        var j = Math.floor(Math.random() * (i + 1));
-        var t = c[i]; c[i] = c[j]; c[j] = t;
+        html += '</div></details>';
+        div.innerHTML = html;
+        return div;
     }
-    return c;
-}
 
-function cargarCitaJuego(i) {
-    citaActual = i;
-    respuestaUsuario = [];
-    piezasDisponibles = barajar(citasJuego[i].piezas);
-    dibujarJuego();
-    document.getElementById('resultado-constructor').innerHTML = '';
-}
-
-function siguienteCitaJuego() { cargarCitaJuego((citaActual + 1) % citasJuego.length); }
-
-function dibujarJuego() {
-    var pool = document.getElementById('piezas-pool');
-    var zona = document.getElementById('zona-respuesta');
-    pool.innerHTML = ''; zona.innerHTML = '';
-    piezasDisponibles.forEach(function(p, idx) {
-        var b = document.createElement('button');
-        b.type = 'button'; b.className = 'pieza-bloque'; b.textContent = p;
-        b.style.cssText = 'background:#334155; color:white; border:1px solid #475569; padding:10px 18px; border-radius:6px; cursor:none; font-size:14px; font-weight:500; transition:background 0.2s;';
-        b.onmouseenter = function() { b.style.background = '#475569'; };
-        b.onmouseleave = function() { b.style.background = '#334155'; };
-        b.onclick = function() { respuestaUsuario.push(p); piezasDisponibles.splice(idx, 1); dibujarJuego(); };
-        pool.appendChild(b);
-    });
-    respuestaUsuario.forEach(function(p, idx) {
-        var b = document.createElement('button');
-        b.type = 'button'; b.className = 'pieza-bloque'; b.textContent = p;
-        b.style.cssText = 'background:var(--primary-color); color:#0B1120; border:1px solid var(--primary-color); padding:10px 18px; border-radius:6px; cursor:none; font-size:14px; font-weight:600; transition:transform 0.2s;';
-        b.onclick = function() { piezasDisponibles.push(p); respuestaUsuario.splice(idx, 1); dibujarJuego(); };
-        zona.appendChild(b);
-    });
-}
-
-function verificarConstructor() {
-    var c = citasJuego[citaActual].piezas;
-    var a = 0;
-    var h = '<p><strong>Resultado:</strong></p><p style="line-height:2;">';
-    for (var i = 0; i < c.length; i++) {
-        var ok = respuestaUsuario[i] === c[i];
-        if (ok) a++;
-        h += '<span style="display:inline-block; margin:2px; padding:4px 8px; border-radius:4px; color:' + (ok ? '#0B1120' : '#fff') + '; background:' + (ok ? 'var(--primary-color)' : 'var(--danger)') + '; font-weight:bold;">' + (respuestaUsuario[i] || '___') + '</span> ';
+    function escaparHtml(texto) {
+        if (texto === null || texto === undefined) return '';
+        var div = document.createElement('div');
+        div.textContent = String(texto);
+        return div.innerHTML;
     }
-    h += '</p>';
-    var tot = parseInt(localStorage.getItem('constructorTotal') || '0');
-    var aci = parseInt(localStorage.getItem('constructorAciertos') || '0');
-    localStorage.setItem('constructorTotal', tot + 1);
-    if (a === c.length) {
-        localStorage.setItem('constructorAciertos', aci + 1);
-        h += '<p style="color:var(--primary-color); font-weight:bold; font-size:1.1rem;">{{ t.constructor_perfecto }}</p>';
-    } else {
-        h += '<p style="color:var(--text-muted);">' + a + ' / ' + c.length + ' correctas</p>';
-    }
-    document.getElementById('resultado-constructor').innerHTML = h;
-    document.getElementById('puntaje-constructor').textContent = localStorage.getItem('constructorAciertos') + ' / ' + localStorage.getItem('constructorTotal');
-}
 
-document.getElementById('btnVerificarConstructor').addEventListener('click', verificarConstructor);
-document.getElementById('btnSiguienteConstructor').addEventListener('click', siguienteCitaJuego);
+    function actualizarBuscarTambien(tema) {
+        var cont = document.getElementById('buscar-tambien-links');
+        var q = encodeURIComponent(tema);
+        cont.innerHTML = '<span>{{ t.buscar_tambien }}:</span>' +
+            '<a href="https://scholar.google.com/scholar?q=' + q + '" target="_blank" rel="noopener">Google Scholar</a>' +
+            '<a href="https://www.semanticscholar.org/search?q=' + q + '" target="_blank" rel="noopener">Semantic Scholar</a>' +
+            '<a href="https://pubmed.ncbi.nlm.nih.gov/?term=' + q + '" target="_blank" rel="noopener">PubMed</a>' +
+            '<a href="https://core.ac.uk/search?q=' + q + '" target="_blank" rel="noopener">CORE</a>' +
+            '<a href="https://www.researchgate.net/search/publication?q=' + q + '" target="_blank" rel="noopener">ResearchGate</a>';
+    }
 
-// ========== EVENTOS GLOBALES ==========
-document.addEventListener('click', function(e) {
-    var target = e.target.closest ? e.target.closest('.corregir-btn, .copiar-btn, .guardar-btn, .enlace-preview, .copiar-todo-btn, .filtro-btn') : null;
-    if (!target) return;
-    if (target.classList.contains('corregir-btn')) {
-        var original = target.getAttribute('data-original');
-        var corregida = target.getAttribute('data-corregida');
-        usarCitaCorregida(original, corregida);
-    }
-    if (target.classList.contains('copiar-btn')) {
-        var cita = decodeURIComponent(target.getAttribute('data-cita'));
-        copiarTexto(target, cita);
-    }
-    if (target.classList.contains('guardar-btn')) {
-        var paper = {
-            titulo: decodeURIComponent(target.getAttribute('data-titulo')),
-            autores: decodeURIComponent(target.getAttribute('data-autores')),
-            año: target.getAttribute('data-anio'),
-            doi: target.getAttribute('data-doi'),
-            enlace: decodeURIComponent(target.getAttribute('data-enlace'))
+    function renderizarResultadosBusqueda(tema, papers) {
+        var gridPdf = document.getElementById('grid-pdf');
+        var gridAcad = document.getElementById('grid-academico');
+        var gridRepos = document.getElementById('grid-repos');
+        var seccionPdf = document.getElementById('seccion-pdf');
+        var seccionAcad = document.getElementById('seccion-academico');
+        var seccionRepos = document.getElementById('seccion-repos');
+
+        gridPdf.innerHTML = ''; gridAcad.innerHTML = ''; gridRepos.innerHTML = '';
+        document.getElementById('resultados-para-tema').textContent = '"' + tema + '"';
+
+        papers.forEach(function(p) {
+            var card = crearTarjetaResultado(p);
+            if (p.pdf_gratis) {
+                gridPdf.appendChild(card);
+            } else if (p.tipo === 'repositorio') {
+                gridRepos.appendChild(card);
+            } else {
+                gridAcad.appendChild(card);
+            }
+        });
+
+        seccionPdf.style.display = gridPdf.children.length ? 'block' : 'none';
+        seccionAcad.style.display = gridAcad.children.length ? 'block' : 'none';
+        seccionRepos.style.display = gridRepos.children.length ? 'block' : 'none';
+
+        actualizarBuscarTambien(tema);
+
+        document.querySelectorAll('.filtro-btn').forEach(function(b) { b.classList.remove('activo'); });
+        var btnTodos = document.querySelector('.filtro-btn[data-filtro="todos"]');
+        if (btnTodos) btnTodos.classList.add('activo');
+
+        window.filtrarResultados = function(tipo, btn) {
+            document.querySelectorAll('.filtro-btn').forEach(function(b) { b.classList.remove('activo'); });
+            btn.classList.add('activo');
+            var cards = document.querySelectorAll('.tarjeta');
+            var anioLimite = new Date().getFullYear() - 5;
+            cards.forEach(function(card) {
+                var mostrar = true;
+                if (tipo === 'pdf' && card.dataset.pdf !== '1') mostrar = false;
+                if (tipo === 'espanol' && card.dataset.espanol !== '1') mostrar = false;
+                if (tipo === 'reciente') {
+                    var a = parseInt(card.dataset.anio);
+                    if (!a || a < anioLimite) mostrar = false;
+                }
+                if (tipo === 'repositorio' && card.dataset.repo !== '1') mostrar = false;
+                card.style.display = mostrar ? 'block' : 'none';
+            });
+            ['grid-pdf','grid-academico','grid-repos'].forEach(function(id, i) {
+                var g = document.getElementById(id);
+                var vis = Array.from(g.children).some(function(c) { return c.style.display !== 'none'; });
+                var secs = [seccionPdf, seccionAcad, seccionRepos];
+                secs[i].style.display = vis ? 'block' : 'none';
+            });
         };
-        guardarReferencia(target, paper);
-    }
-    if (target.classList.contains('enlace-preview')) {
-        var url = decodeURIComponent(target.getAttribute('data-pdf-url'));
-        previsualizarPdf(url);
-    }
-    if (target.classList.contains('copiar-todo-btn')) {
-        copiarTodo(target.getAttribute('data-formato'));
-    }
-    if (target.classList.contains('filtro-btn')) {
-        filtrar(target.getAttribute('data-filtro'), target);
-    }
-});
 
-// Wrapper para filtros (llama a la función encapsulada del bloque de resultados)
-function filtrar(tipo, btn) {
-    if (window.filtrarResultados) window.filtrarResultados(tipo, btn);
+        document.getElementById('resultados-buscar-wrapper').style.display = 'block';
+        document.getElementById('buscar-sin-resultados').style.display = 'none';
+
+        // Anuncio accesible
+        var anuncio = document.getElementById('anuncio-resultados');
+        if (anuncio) {
+            anuncio.textContent = papers.length + ' resultados encontrados para ' + tema;
+        }
+    }
+
+    function mostrarLoaderBusqueda() {
+        document.getElementById('resultados-buscar-wrapper').style.display = 'none';
+        document.getElementById('buscar-sin-resultados').style.display = 'none';
+        document.getElementById('buscar-error').style.display = 'none';
+        document.getElementById('loaderContainer').classList.add('active');
+        document.getElementById('skeleton-container').style.display = 'grid';
+        iniciarLoader();
+    }
+
+    function ocultarLoaderBusqueda() {
+        document.getElementById('loaderContainer').classList.remove('active');
+        document.getElementById('skeleton-container').style.display = 'none';
+    }
+
+    // ===== BÚSQUEDA AJAX =====
+    var buscarForm = document.getElementById('buscar-form');
+    if (buscarForm) {
+        buscarForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var tema = document.getElementById('search-input').value.trim();
+            if (!tema) return;
+            var btn = document.getElementById('btn-buscar-submit');
+            btn.disabled = true;
+            mostrarLoaderBusqueda();
+            fetch('/api/buscar', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'tema=' + encodeURIComponent(tema)
+            }).then(function(resp) {
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return resp.json();
+            }).then(function(data) {
+                ocultarLoaderBusqueda();
+                btn.disabled = false;
+                if (!data.papers || data.papers.length === 0) {
+                    document.getElementById('buscar-sin-resultados').style.display = 'block';
+                    return;
+                }
+                renderizarResultadosBusqueda(data.tema, data.papers);
+            }).catch(function(err) {
+                console.error('Error en la búsqueda:', err);
+                ocultarLoaderBusqueda();
+                btn.disabled = false;
+                document.getElementById('buscar-error').style.display = 'block';
+                mostrarToast('Error al buscar: ' + err.message, 'error');
+            });
+        });
+    }
+
+    // Carga inicial de resultados
+    (function() {
+        var datosEl = document.getElementById('datos-papers');
+        if (!datosEl) return;
+        try {
+            var inicial = JSON.parse(datosEl.textContent);
+            ocultarLoaderBusqueda();
+            if (inicial.papers && inicial.papers.length) {
+                renderizarResultadosBusqueda(inicial.tema, inicial.papers);
+            } else {
+                document.getElementById('buscar-sin-resultados').style.display = 'block';
+            }
+        } catch (err) {
+            console.error('Error al cargar resultados iniciales:', err);
+        }
+    })();
+
+    // ===== AUTOCOMPLETE =====
+    var searchInput = document.getElementById('search-input');
+    var suggestionsBox = document.getElementById('suggestions-dropdown');
+
+    function debounce(fn, delay) {
+        var timer;
+        return function () {
+            var args = arguments;
+            clearTimeout(timer);
+            timer = setTimeout(function() { fn.apply(null, args); }, delay);
+        };
+    }
+
+    async function fetchSugerencias(query) {
+        try {
+            var resp = await fetch('/api/suggest-tema?tema=' + encodeURIComponent(query));
+            if (!resp.ok) return [];
+            return await resp.json();
+        } catch (e) { return []; }
+    }
+
+    function mostrarSugerencias(lista) {
+        suggestionsBox.innerHTML = '';
+        if (lista.length === 0) { suggestionsBox.style.display = 'none'; return; }
+        suggestionsBox.innerHTML = lista.map(function(item) {
+            var anio = item.año ? ' (' + escaparHtml(item.año) + ')' : '';
+            return '<div class="sugerencia-item" data-valor="' + escaparHtml(item.titulo) + '" role="option">' + iconoSvg('doc-mini') + '<span>' + escaparHtml(item.titulo) + anio + '</span></div>';
+        }).join('');
+        suggestionsBox.style.display = 'block';
+        document.querySelectorAll('.sugerencia-item').forEach(function(el) {
+            el.addEventListener('click', function() {
+                searchInput.value = el.dataset.valor;
+                suggestionsBox.style.display = 'none';
+            });
+        });
+    }
+
+    if (searchInput) {
+        var debouncedInput = debounce(async function() {
+            var q = searchInput.value.trim();
+            if (q.length < 3) { suggestionsBox.style.display = 'none'; return; }
+            mostrarSugerencias(await fetchSugerencias(q));
+        }, 300);
+        searchInput.addEventListener('input', debouncedInput);
+        document.addEventListener('click', function(e) {
+            if (!searchInput.contains(e.target) && !suggestionsBox.contains(e.target)) {
+                suggestionsBox.style.display = 'none';
+            }
+        });
+    }
+
+    if (searchInput) {
+    var indiceActivo = -1;
+    searchInput.addEventListener('keydown', function(e) {
+        var items = suggestionsBox.querySelectorAll('.sugerencia-item');
+        if (!items.length || suggestionsBox.style.display === 'none') return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            indiceActivo = Math.min(indiceActivo + 1, items.length - 1);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            indiceActivo = Math.max(indiceActivo - 1, 0);
+        } else if (e.key === 'Enter' && indiceActivo >= 0) {
+            e.preventDefault();
+            searchInput.value = items[indiceActivo].dataset.valor;
+            suggestionsBox.style.display = 'none';
+            indiceActivo = -1;
+            return;
+        } else if (e.key === 'Escape') {
+            suggestionsBox.style.display = 'none';
+            indiceActivo = -1;
+            return;
+        } else {
+            return;
+        }
+        items.forEach(function(it, i) {
+            it.style.background = i === indiceActivo ? 'rgba(16,185,129,0.15)' : '';
+            it.setAttribute('aria-selected', i === indiceActivo ? 'true' : 'false');
+        });
+        items[indiceActivo].scrollIntoView({ block: 'nearest' });
+    });
 }
-</script>
 
+    // ===== UTILIDADES =====
+    function usarCitaCorregida(original, corregida) {
+        var textarea = document.querySelector('textarea[name="cita"]');
+        if (!textarea) return;
+        var lineas = textarea.value.split('\n');
+        var nuevas = lineas.map(function(l) { return l.trim() === original ? corregida : l; });
+        textarea.value = nuevas.join('\n');
+        textarea.focus();
+    }
+
+    function copiarTexto(btn, texto) {
+        navigator.clipboard.writeText(texto).then(function() {
+            var originalHtml = btn.innerHTML;
+            btn.innerHTML = iconoSvg('check');
+            mostrarToast('Texto copiado al portapapeles', 'success');
+            setTimeout(function() { btn.innerHTML = originalHtml; }, 2000);
+        });
+    }
+
+    function generarCitaJS(paper, formato) {
+        var autores = paper.autores || "Anon.";
+        var anio = paper.año || "s.f.";
+        var titulo = paper.titulo || "Sin título";
+        var doi = paper.doi || "";
+        var enlace = paper.enlace || "";
+        if (formato === "apa") {
+            return doi && doi !== "sin DOI" ? autores + " (" + anio + "). " + titulo + ". https://doi.org/" + doi : autores + " (" + anio + "). " + titulo + ". " + enlace;
+        } else if (formato === "vancouver") {
+            return doi && doi !== "sin DOI" ? autores + ". " + titulo + ". " + anio + ". doi:" + doi : autores + ". " + titulo + ". " + anio + ". Disponible en: " + enlace;
+        } else if (formato === "ieee") {
+            return doi && doi !== "sin DOI" ? autores + ', "' + titulo + '," ' + anio + ". doi: " + doi + "." : autores + ', "' + titulo + '," ' + anio + ". [Online]. Available: " + enlace;
+        } else if (formato === "mla") {
+            return doi && doi !== "sin DOI" ? autores + '. "' + titulo + '." (' + anio + "). doi:" + doi + "." : autores + '. "' + titulo + '." ' + anio + ", " + enlace + ".";
+        }
+        return "";
+    }
+
+    function guardarReferencia(btn, paper) {
+        var refs = JSON.parse(localStorage.getItem('userBiblio') || '[]');
+        if (refs.some(function(r) { return r.titulo === paper.titulo; })) {
+            mostrarToast('Esta referencia ya está en tu bibliografía.', 'warning');
+            return;
+        }
+        refs.push(paper);
+        localStorage.setItem('userBiblio', JSON.stringify(refs));
+        btn.style.background = '#10B981';
+        btn.innerHTML = iconoSvg('check') + ' Guardado';
+        mostrarToast('Referencia guardada correctamente.', 'success');
+        setTimeout(function() {
+            btn.style.background = '#F59E0B';
+            btn.innerHTML = iconoSvg('star') + ' {{ t.guardar_boton }}';
+        }, 2000);
+    }
+
+    function cargarBibliografia() {
+        var container = document.getElementById('biblio-container');
+        if (!container) return;
+        var refs = JSON.parse(localStorage.getItem('userBiblio') || '[]');
+        if (refs.length === 0) {
+            container.innerHTML = "<p style='opacity: 0.7; text-align: center; padding: 20px;'>{{ t.biblio_vacia }}</p>";
+            return;
+        }
+        var formatos = [
+            { id: 'apa', nombre: '{{ t.cita_apa_label }}' },
+            { id: 'vancouver', nombre: '{{ t.cita_vancouver_label }}' },
+            { id: 'ieee', nombre: '{{ t.cita_ieee_label }}' },
+            { id: 'mla', nombre: '{{ t.cita_mla_label }}' }
+        ];
+        var html = '<div style="display: grid; gap: 20px;">';
+        formatos.forEach(function(fmt) {
+            html += '<div class="tarjeta" style="background: rgba(255,255,255,0.05);">';
+            html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border-light); padding-bottom: 10px;">';
+            html += '<h3 style="margin: 0; color: var(--primary-color);">' + fmt.nombre + '</h3>';
+            html += '<button type="button" class="copiar-todo-btn" data-formato="' + fmt.id + '" style="background: var(--primary-color); color: #0B1120; border: none; padding: 8px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; display:inline-flex; align-items:center; gap:6px;">' + iconoSvg('copy') + ' {{ t.copiar_todo }}</button>';
+            html += '</div>';
+            refs.forEach(function(paper, index) {
+                var cita = escaparHtml(generarCitaJS(paper, fmt.id));
+                html += '<p style="margin: 0 0 12px 0; word-break: break-word; opacity: 0.9; border-left: 2px solid var(--border-light); padding-left: 10px;">' + (index + 1) + '. ' + cita + '</p>';
+            });
+            html += '</div>';
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    function copiarTodo(formato) {
+        var refs = JSON.parse(localStorage.getItem('userBiblio') || '[]');
+        var texto = refs.map(function(paper, index) {
+            return (index + 1) + ". " + generarCitaJS(paper, formato);
+        }).join('\n\n');
+        navigator.clipboard.writeText(texto).then(function() {
+            mostrarToast('Bibliografía copiada al portapapeles!', 'success');
+        });
+    }
+
+    // ===== CONSTRUCTOR DE CITAS =====
+    var citasJuego = [
+        { piezas: ["García, J. A.", "(2021).", "Efecto de la temperatura en la oxidación de aceites vegetales.", "Revista de Ciencia de los Alimentos,", "15(3),", "45-58."] },
+        { piezas: ["López, M., & Pérez, R.", "(2019).", "Análisis del índice de peróxidos en aceite de oliva.", "Grasas y Aceites,", "70(2),", "112-120."] },
+        { piezas: ["UNESCO.", "(2023).", "Alfabetización mediática e informacional para la era digital.", "Ediciones UNESCO,", "1(1),", "10-25."] },
+        { piezas: ["Smith, J.", "(2022).", "Impacto de la inteligencia artificial en la educación superior.", "Journal of EdTech,", "8(4),", "112-128."] },
+        { piezas: ["Chen, L.", "(2020).", "Desarrollo de vacunas de ARNm frente a pandemias globales.", "Nature Medicine,", "26(5),", "450-460."] },
+        { piezas: ["Torres, A.", "(2018).", "Sostenibilidad y energías renovables en zonas rurales.", "Revista de Ingeniería Ambiental,", "12(1),", "33-41."] }
+    ];
+    var citaActual = 0;
+    var piezasDisponibles = [];
+    var respuestaUsuario = [];
+
+    function barajar(arr) {
+        var c = arr.slice();
+        for (var i = c.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var t = c[i]; c[i] = c[j]; c[j] = t;
+        }
+        return c;
+    }
+
+    function cargarCitaJuego(i) {
+        citaActual = i;
+        respuestaUsuario = [];
+        piezasDisponibles = barajar(citasJuego[i].piezas);
+        dibujarJuego();
+        document.getElementById('resultado-constructor').innerHTML = '';
+    }
+
+    function siguienteCitaJuego() { cargarCitaJuego((citaActual + 1) % citasJuego.length); }
+
+    function dibujarJuego() {
+        var pool = document.getElementById('piezas-pool');
+        var zona = document.getElementById('zona-respuesta');
+        pool.innerHTML = ''; zona.innerHTML = '';
+
+        piezasDisponibles.forEach(function(p, idx) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'pieza-bloque';
+            b.textContent = p;
+            b.setAttribute('aria-label', 'Colocar pieza: ' + p);
+            b.style.cssText = 'background:#334155; color:white; border:1px solid #475569; padding:10px 18px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:500; transition:background 0.2s;';
+            b.onmouseenter = function() { b.style.background = '#475569'; };
+            b.onmouseleave = function() { b.style.background = '#334155'; };
+            b.onclick = function() { respuestaUsuario.push(p); piezasDisponibles.splice(idx, 1); dibujarJuego(); };
+            pool.appendChild(b);
+        });
+
+        respuestaUsuario.forEach(function(p, idx) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'pieza-bloque';
+            b.textContent = p;
+            b.setAttribute('aria-label', 'Quitar pieza: ' + p);
+            b.style.cssText = 'background:var(--primary-color); color:#0B1120; border:1px solid var(--primary-color); padding:10px 18px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; transition:transform 0.2s;';
+            b.onclick = function() { piezasDisponibles.push(p); respuestaUsuario.splice(idx, 1); dibujarJuego(); };
+            zona.appendChild(b);
+        });
+    }
+
+    function verificarConstructor() {
+        var c = citasJuego[citaActual].piezas;
+        var a = 0;
+        var h = '<p><strong>Resultado:</strong></p><p style="line-height:2;">';
+        for (var i = 0; i < c.length; i++) {
+            var ok = respuestaUsuario[i] === c[i];
+            if (ok) a++;
+            h += '<span style="display:inline-block; margin:2px; padding:4px 8px; border-radius:4px; color:' + (ok ? '#0B1120' : '#fff') + '; background:' + (ok ? 'var(--primary-color)' : 'var(--danger)') + '; font-weight:bold;">' + (respuestaUsuario[i] || '___') + '</span> ';
+        }
+        h += '</p>';
+        var tot = parseInt(localStorage.getItem('constructorTotal') || '0');
+        var aci = parseInt(localStorage.getItem('constructorAciertos') || '0');
+        localStorage.setItem('constructorTotal', tot + 1);
+        if (a === c.length) {
+            localStorage.setItem('constructorAciertos', aci + 1);
+            h += '<p style="color:var(--primary-color); font-weight:bold; font-size:1.1rem;">{{ t.constructor_perfecto }}</p>';
+            mostrarToast('¡Cita perfecta!', 'success');
+        } else {
+            h += '<p style="color:var(--text-muted);">' + a + ' / ' + c.length + ' correctas</p>';
+        }
+        document.getElementById('resultado-constructor').innerHTML = h;
+        document.getElementById('puntaje-constructor').textContent = localStorage.getItem('constructorAciertos') + ' / ' + localStorage.getItem('constructorTotal');
+    }
+
+    document.getElementById('btnVerificarConstructor').addEventListener('click', verificarConstructor);
+    document.getElementById('btnSiguienteConstructor').addEventListener('click', siguienteCitaJuego);
+
+    // ===== EVENTOS GLOBALES =====
+    document.addEventListener('click', function(e) {
+        var target = e.target.closest ? e.target.closest('.corregir-btn, .copiar-btn, .guardar-btn, .enlace-preview, .copiar-todo-btn, .filtro-btn') : null;
+        if (!target) return;
+        if (target.classList.contains('corregir-btn')) {
+            var original = target.getAttribute('data-original');
+            var corregida = target.getAttribute('data-corregida');
+            usarCitaCorregida(original, corregida);
+        }
+        if (target.classList.contains('copiar-btn')) {
+            var cita = decodeURIComponent(target.getAttribute('data-cita'));
+            copiarTexto(target, cita);
+        }
+        if (target.classList.contains('guardar-btn')) {
+            var paper = {
+                titulo: decodeURIComponent(target.getAttribute('data-titulo')),
+                autores: decodeURIComponent(target.getAttribute('data-autores')),
+                año: target.getAttribute('data-anio'),
+                doi: target.getAttribute('data-doi'),
+                enlace: decodeURIComponent(target.getAttribute('data-enlace'))
+            };
+            guardarReferencia(target, paper);
+        }
+        if (target.classList.contains('enlace-preview')) {
+            var url = decodeURIComponent(target.getAttribute('data-pdf-url'));
+            previsualizarPdf(url);
+        }
+        if (target.classList.contains('copiar-todo-btn')) {
+            copiarTodo(target.getAttribute('data-formato'));
+        }
+        if (target.classList.contains('filtro-btn')) {
+            filtrar(target.getAttribute('data-filtro'), target);
+        }
+    });
+
+    function filtrar(tipo, btn) {
+        if (window.filtrarResultados) window.filtrarResultados(tipo, btn);
+    }
+
+    // Efecto de seguimiento de mouse en botones de nav
+    document.querySelectorAll('.nav-boton').forEach(function(btn) {
+        btn.addEventListener('mousemove', function(e) {
+            var r = btn.getBoundingClientRect();
+            btn.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100) + '%');
+            btn.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100) + '%');
+        });
+    });
+
+    </script>
 </body>
 </html>
 """
 
 if __name__ == "__main__":
+    if os.environ.get("RENDER") or os.environ.get("VERCEL"):
+        CONFIG["modo_debug"] = False
     app.run(host="0.0.0.0", port=CONFIG["puerto"], debug=CONFIG["modo_debug"])
