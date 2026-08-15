@@ -1525,6 +1525,26 @@ PLANTILLA = r"""
             .layout-wrapper { flex-direction: column; }
             .grid-resultados { grid-template-columns: 1fr; }
         }
+    .animal-svg-wrap {
+    position: relative;
+    width: 70px; height: 70px;
+    margin: 0 auto 10px;
+    display: flex; align-items: center; justify-content: center;
+}
+.animal-svg-wrap svg { width: 100%; height: 100%; transition: filter .4s ease; }
+.animal-svg-wrap.bloqueado svg {
+    filter: grayscale(100%) brightness(0.35) contrast(0.8);
+}
+.animal-svg-wrap.bloqueado::after {
+    content: "🔒";
+    position: absolute;
+    font-size: 22px;
+    filter: none;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+}
+.animal-svg-wrap.desbloqueado svg {
+    filter: drop-shadow(0 0 10px currentColor);
+}
     </style>
 </head>
 <body>
@@ -2713,6 +2733,16 @@ document.getElementById('form-extracto').addEventListener('submit', function(e) 
     }
     draw();
 })();
+var ARTE_ANIMALES = {
+    lagartija: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="55" cy="35" rx="30" ry="14" fill="#65a30d"/><ellipse cx="55" cy="35" rx="30" ry="14" fill="none" stroke="#4d7c0f" stroke-width="2"/><path d="M25 35 L5 20" stroke="#4d7c0f" stroke-width="6" stroke-linecap="round"/><circle cx="82" cy="28" r="9" fill="#84cc16"/><circle cx="86" cy="25" r="2" fill="#1a2e05"/><path d="M40 45 L30 55 M50 48 L45 58 M65 48 L68 58 M75 45 L82 55" stroke="#4d7c0f" stroke-width="4" stroke-linecap="round"/></svg>',
+    vibora: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><path d="M10 45 Q30 15 50 40 T90 25" stroke="#f59e0b" stroke-width="14" fill="none" stroke-linecap="round"/><path d="M10 45 Q30 15 50 40 T90 25" stroke="#b45309" stroke-width="14" fill="none" stroke-linecap="round" stroke-dasharray="2 10"/><circle cx="92" cy="23" r="7" fill="#f59e0b"/><circle cx="94" cy="21" r="1.6" fill="#1a1207"/></svg>',
+    escorpion: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="45" cy="38" rx="22" ry="12" fill="#d97706"/><path d="M65 32 Q85 20 88 5 Q90 -2 82 4 Q80 12 70 20" stroke="#b45309" stroke-width="6" fill="none" stroke-linecap="round"/><circle cx="83" cy="4" r="4" fill="#d97706"/><path d="M25 30 L8 20 M28 40 L10 45 M60 45 L58 55 M50 45 L48 55" stroke="#b45309" stroke-width="4" stroke-linecap="round"/></svg>',
+    varano: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="35" rx="35" ry="15" fill="#7c3aed" opacity="0.85"/><ellipse cx="50" cy="35" rx="35" ry="15" fill="none" stroke="#5b21b6" stroke-width="2"/><path d="M18 35 L2 22" stroke="#5b21b6" stroke-width="7" stroke-linecap="round"/><circle cx="82" cy="27" r="10" fill="#8b5cf6"/><path d="M12 46 Q40 60 68 48" stroke="#a78bfa" stroke-width="2" fill="none"/></svg>',
+    'camello-blanco': '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><path d="M20 50 L28 22 Q35 8 45 20 Q52 10 60 22 L68 50 Z" fill="#fef3c7"/><path d="M15 50 L10 30 L20 22 L24 50 Z" fill="#fde68a"/><circle cx="9" cy="26" r="5" fill="#fef3c7"/></svg>',
+    'zorro-fennec': '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="42" rx="28" ry="14" fill="#fbbf24"/><path d="M40 30 L30 5 L45 22 Z" fill="#fbbf24"/><path d="M60 30 L72 5 L58 22 Z" fill="#fbbf24"/><circle cx="70" cy="38" r="10" fill="#fcd34d"/><circle cx="74" cy="35" r="1.6" fill="#1a1207"/><path d="M20 45 Q5 42 8 55" stroke="#fbbf24" stroke-width="6" fill="none" stroke-linecap="round"/></svg>',
+    camaleon: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><path d="M15 40 Q40 55 70 35 Q85 25 80 15 Q75 25 60 28 Q35 20 25 35 Z" fill="#22c55e"/><circle cx="78" cy="20" r="9" fill="#16a34a"/><circle cx="81" cy="17" r="2.5" fill="#052e16"/></svg>',
+    escarabajo: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="35" rx="26" ry="20" fill="#1e293b"/><path d="M50 15 V55" stroke="#0f172a" stroke-width="2"/><path d="M20 25 L8 15 M20 45 L8 52 M80 25 L92 15 M80 45 L92 52" stroke="#334155" stroke-width="4" stroke-linecap="round"/><circle cx="50" cy="18" r="5" fill="#334155"/></svg>'
+};
 // ===== SISTEMA DE MONEDAS Y TIENDA =====
 var CATALOGO_ANIMALES = [
     { id: 'lagartija',      nombre: 'Lagartija del desierto', emoji: '🦎', rareza: 'Común',      costo: 40,  color: '#94a3b8' },
@@ -2769,11 +2799,12 @@ function renderizarTienda() {
         var div = document.createElement('div');
         div.className = 'tarjeta';
         div.style.textAlign = 'center';
+        var iconoHtml = '<div class="animal-svg-wrap ' + (poseido ? 'desbloqueado' : 'bloqueado') + '" style="color:' + a.color + ';">' + (ARTE_ANIMALES[a.id] || '') + '</div>';
         var accionHtml = poseido
             ? '<button type="button" class="accion usar-animal-btn" data-id="' + a.id + '" style="width:100%; justify-content:center; background:' + (esActivo ? 'var(--primary-color)' : '#334155') + '; color:' + (esActivo ? '#0B1120' : '#fff') + ';">' + (esActivo ? '✓ Guía activo' : 'Usar como guía') + '</button>'
             : '<button type="button" class="accion comprar-animal-btn" data-id="' + a.id + '" style="width:100%; justify-content:center;">🪙 ' + a.costo + '</button>';
         div.innerHTML =
-            '<div style="font-size:48px; margin-bottom:8px;" aria-hidden="true">' + a.emoji + '</div>' +
+            iconoHtml +
             '<p style="font-weight:700; color:#fff; margin:0 0 4px 0;">' + a.nombre + '</p>' +
             '<span style="display:inline-block; font-size:11px; font-weight:bold; padding:3px 10px; border-radius:12px; margin-bottom:10px; color:' + a.color + '; border:1px solid ' + a.color + '55; background:' + a.color + '18;">' + a.rareza + '</span><br>' +
             accionHtml;
