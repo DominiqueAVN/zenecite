@@ -1132,18 +1132,50 @@ PLANTILLA = r"""
         }
         * { box-sizing: border-box; }
         body {
-            margin: 0;
-            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-dark);
-            background-image:
-                radial-gradient(circle at 85% 15%, rgba(16, 185, 129, 0.06) 0%, transparent 40%),
-                radial-gradient(circle at 15% 85%, rgba(59, 130, 246, 0.06) 0%, transparent 40%);
-            background-attachment: fixed;
-            color: var(--text-main);
-            min-height: 100vh;
-            overflow-x: hidden;
-            cursor: auto !important;
-        }
+    margin: 0;
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+}
+
+/* Malla geométrica de fondo — capa fija detrás de todo */
+#malla-fondo {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: -1;
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+/* Orbes de luz que respiran lentamente */
+.orbe-luz {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(90px);
+    pointer-events: none;
+    z-index: -1;
+    animation: respirarOrbe 10s ease-in-out infinite;
+}
+.orbe-dorado {
+    width: 420px; height: 420px;
+    background: radial-gradient(circle, rgba(245,185,66,0.18) 0%, transparent 70%);
+    top: -100px; right: -100px;
+    animation-delay: 0s;
+}
+.orbe-cian {
+    width: 380px; height: 380px;
+    background: radial-gradient(circle, rgba(52,216,216,0.16) 0%, transparent 70%);
+    bottom: -120px; left: -120px;
+    animation-delay: 3s;
+}
+@keyframes respirarOrbe {
+    0%, 100% { transform: scale(1); opacity: 0.7; }
+    50% { transform: scale(1.15); opacity: 1; }
+}
 
         /* Foco visible SOLO con teclado */
         a:focus-visible,
@@ -1205,6 +1237,7 @@ PLANTILLA = r"""
             .nav-boton::before {
                 transform: scaleY(1) !important;
             }
+            .orbe-luz { animation: none !important; }
         }
 
         /* ===== ICONOS ===== */
@@ -1478,6 +1511,13 @@ PLANTILLA = r"""
 </head>
 <body>
     <a href="#main-content" class="skip-link">Saltar al contenido principal</a>
+
+    <!-- Malla geométrica de fondo -->
+    <canvas id="malla-fondo" aria-hidden="true"></canvas>
+
+    <!-- Orbes de luz ambiental -->
+    <div class="orbe-luz orbe-dorado" aria-hidden="true"></div>
+    <div class="orbe-luz orbe-cian" aria-hidden="true"></div>
 
     <!-- Toast accesible (solo lector de pantalla) -->
     <div id="toast" class="sr-only" role="status" aria-live="polite"></div>
@@ -2453,7 +2493,73 @@ PLANTILLA = r"""
             btn.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100) + '%');
         });
     });
+// ===== MALLA GEOMÉTRICA DE FONDO =====
+(function() {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        var c = document.getElementById('malla-fondo');
+        if (c) c.style.display = 'none';
+        return;
+    }
+    var canvas = document.getElementById('malla-fondo');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var W, H;
 
+    function resize() {
+        W = canvas.width = window.innerWidth;
+        H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    var CELL = 60;
+    var COLOR = '16, 185, 129';
+
+    function draw() {
+        ctx.clearRect(0, 0, W, H);
+        ctx.strokeStyle = 'rgba(' + COLOR + ', 0.06)';
+        ctx.lineWidth = 0.5;
+
+        for (var x = 0; x < W + CELL; x += CELL) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, H);
+            ctx.stroke();
+        }
+        for (var y = 0; y < H + CELL; y += CELL) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(W, y);
+            ctx.stroke();
+        }
+
+        for (var gx = 0; gx < W; gx += CELL) {
+            for (var gy = 0; gy < H; gy += CELL) {
+                if (Math.random() < 0.03) {
+                    var cx = gx + CELL / 2;
+                    var cy = gy + CELL / 2;
+                    var r = Math.max(1, 3 + Math.random() * 4);
+                    var alpha = 0.08 + Math.random() * 0.12;
+                    ctx.fillStyle = 'rgba(' + COLOR + ',' + alpha + ')';
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                if (Math.random() < 0.015) {
+                    ctx.strokeStyle = 'rgba(' + COLOR + ', 0.04)';
+                    ctx.lineWidth = 0.3;
+                    ctx.beginPath();
+                    ctx.moveTo(gx, gy);
+                    ctx.lineTo(gx + CELL, gy + CELL);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        requestAnimationFrame(draw);
+    }
+    draw();
+})();
     </script>
 </body>
 </html>
