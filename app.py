@@ -462,9 +462,22 @@ def buscar_en_semantic_scholar(tema):
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
     params = {
         "query": tema,
-        "fields": "title,authors,year,openAccessPdf,externalIds",
+        "fields": "title,authors,year,openAccessPdf,externalIds,abstract",  # se agregó "abstract"
         "limit": 6
     }
+    # ... el resto de la función igual, y en el diccionario del paper agrega:
+    papers.append({
+        "titulo": item.get("title", "Sin título"),
+        "autores": autores,
+        "año": item.get("year", "s.f."),
+        "doi": doi,
+        "enlace": f"https://www.semanticscholar.org/paper/{item.get('paperId', '')}",
+        "pdf_gratis": pdf_url,
+        "abstract": item.get("abstract") or "",  # nuevo campo
+        "en_espanol": detectar_idioma_titulo(item.get("title", "")),
+        "fuente": "Semantic Scholar", "region": None,
+        "tipo": "academico"
+    })
     headers = {"User-Agent": "Mozilla/5.0 (AcademicCiteBot/1.0)"}
     try:
         r = requests.get(url, params=params, headers=headers, timeout=6)
@@ -1739,17 +1752,42 @@ PLANTILLA = r"""
             </div>
 
             <div class="tab-content" id="tab-constructor">
+    <div class="seccion glass">
+        <h2><span class="icon icon-grid" aria-hidden="true"></span> El Camello del Sahara</h2>
+        <p>Arma la cita en el orden correcto para guiar al camello por el desierto hasta el oasis.</p>
+
+        <div id="escena-desierto" style="position:relative; height:220px; border-radius:16px; overflow:hidden; margin:20px 0; background:linear-gradient(180deg, #1a2a3a 0%, #2b3f52 40%, #d9a86c 40%, #c99456 100%);">
+            <div id="camino-huellas" style="position:absolute; bottom:35px; left:5%; right:15%; height:4px; background:repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0 6px, transparent 6px 18px); border-radius:2px;"></div>
+            <div id="camello-sprite" style="position:absolute; bottom:38px; left:5%; font-size:42px; transition: left 0.6s ease; filter:drop-shadow(0 4px 6px rgba(0,0,0,0.4));" role="img" aria-label="Camello avanzando por el desierto">🐪</div>
+            <div id="oasis-sprite" style="position:absolute; bottom:20px; right:6%; font-size:44px;" aria-hidden="true">🌴💧</div>
+            <div class="sr-only" id="progreso-camello" role="status" aria-live="polite"></div>
+        </div>
+
+        <p class="puntaje" style="font-size: 1.2rem; color: var(--primary-color);">{{ t.texto_puntaje }}: <span id="puntaje-constructor">0 / 0</span></p>
+        <p><strong>{{ t.constructor_pool }}</strong></p>
+        <div id="piezas-pool" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--border-light); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(0,0,0,0.2);" role="group" aria-label="Piezas disponibles"></div>
+        <p><strong>{{ t.constructor_zona }}</strong></p>
+        <div id="zona-respuesta" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--primary-color); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(16,185,129,0.05);" role="group" aria-label="Tu cita en construcción"></div>
+        <button type="button" class="accion" id="btnVerificarConstructor">{{ t.constructor_verificar }}</button>
+        <button type="button" class="accion" id="btnSiguienteConstructor" style="background:#334155; color:white;">{{ t.constructor_siguiente }}</button>
+        <div id="resultado-constructor" style="margin-top:20px;" role="status" aria-live="polite"></div>
+
+        <div id="bonus-camello" style="display:none; margin-top:25px; padding:20px; border-radius:14px; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3);">
+            <div style="display:flex; gap:14px; align-items:flex-start;">
+                <span style="font-size:36px;" aria-hidden="true">🐪</span>
+                <div>
+                    <p style="margin:0 0 6px 0; font-weight:700; color:var(--primary-color);">El camello encontró algo en tu bibliografía...</p>
+                    <div id="bonus-camello-texto" style="color:var(--text-main); line-height:1.6;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+            <div class="tab-content" id="tab-tienda">
                 <div class="seccion glass">
-                    <h2><span class="icon icon-grid" aria-hidden="true"></span> {{ t.constructor_titulo }}</h2>
-                    <p>{{ t.constructor_desc }}</p>
-                    <p class="puntaje" style="font-size: 1.2rem; color: var(--primary-color);">{{ t.texto_puntaje }}: <span id="puntaje-constructor">0 / 0</span></p>
-                    <p><strong>{{ t.constructor_pool }}</strong></p>
-                    <div id="piezas-pool" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--border-light); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(0,0,0,0.2);" role="group" aria-label="Piezas disponibles para construir la cita"></div>
-                    <p><strong>{{ t.constructor_zona }}</strong></p>
-                    <div id="zona-respuesta" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--primary-color); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(16,185,129,0.05);" role="group" aria-label="Tu cita en construcción"></div>
-                    <button type="button" class="accion" id="btnVerificarConstructor">{{ t.constructor_verificar }}</button>
-                    <button type="button" class="accion" id="btnSiguienteConstructor" style="background:#334155; color:white;">{{ t.constructor_siguiente }}</button>
-                    <div id="resultado-constructor" style="margin-top:20px;" role="status" aria-live="polite"></div>
+                    <h2><span class="icon icon-star" aria-hidden="true"></span> Tienda del Desierto</h2>
+                    <p>Completa citas para ganar monedas y adopta animales del desierto para que te acompañen. Mientras más juegues, más raros los que puedes desbloquear.</p>
+                    <div id="grid-tienda" class="grid-resultados"></div>
                 </div>
             </div>
 
@@ -1807,6 +1845,7 @@ PLANTILLA = r"""
         localStorage.setItem('tabActiva', nombre);
         if (nombre === 'biblio') cargarBibliografia();
         if (nombre === 'constructor' && !window.juegoIniciado) { cargarCitaJuego(0); window.juegoIniciado = true; }
+        if (nombre === 'tienda') renderizarTienda();
     }
 
     document.querySelectorAll('.nav-boton').forEach(function(btn) {
@@ -2380,12 +2419,28 @@ PLANTILLA = r"""
     }
 
     function cargarCitaJuego(i) {
-        citaActual = i;
-        respuestaUsuario = [];
-        piezasDisponibles = barajar(citasJuego[i].piezas);
-        dibujarJuego();
-        document.getElementById('resultado-constructor').innerHTML = '';
+    citaActual = i;
+    respuestaUsuario = [];
+    piezasDisponibles = barajar(citasJuego[i].piezas);
+    dibujarJuego();
+    document.getElementById('resultado-constructor').innerHTML = '';
+    document.getElementById('bonus-camello').style.display = 'none';
+    document.getElementById('camello-sprite').textContent = obtenerAnimalActivo();
+    moverCamello(0);
+}
+    function moverCamello(pasosCompletados) {
+    var sprite = document.getElementById('camello-sprite');
+    var totalPiezas = citasJuego[citaActual].piezas.length;
+    var porcentaje = Math.min(pasosCompletados / totalPiezas, 1);
+    var posicionMin = 5, posicionMax = 78;
+    var izquierda = posicionMin + (posicionMax - posicionMin) * porcentaje;
+    sprite.style.left = izquierda + '%';
+
+    var anuncio = document.getElementById('progreso-camello');
+    if (anuncio) {
+        anuncio.textContent = 'El camello avanzó ' + pasosCompletados + ' de ' + totalPiezas + ' tramos hacia el oasis.';
     }
+}
 
     function siguienteCitaJuego() { cargarCitaJuego((citaActual + 1) % citasJuego.length); }
 
@@ -2420,28 +2475,39 @@ PLANTILLA = r"""
     }
 
     function verificarConstructor() {
-        var c = citasJuego[citaActual].piezas;
-        var a = 0;
-        var h = '<p><strong>Resultado:</strong></p><p style="line-height:2;">';
-        for (var i = 0; i < c.length; i++) {
-            var ok = respuestaUsuario[i] === c[i];
-            if (ok) a++;
-            h += '<span style="display:inline-block; margin:2px; padding:4px 8px; border-radius:4px; color:' + (ok ? '#0B1120' : '#fff') + '; background:' + (ok ? 'var(--primary-color)' : 'var(--danger)') + '; font-weight:bold;">' + (respuestaUsuario[i] || '___') + '</span> ';
-        }
-        h += '</p>';
-        var tot = parseInt(localStorage.getItem('constructorTotal') || '0');
-        var aci = parseInt(localStorage.getItem('constructorAciertos') || '0');
-        localStorage.setItem('constructorTotal', tot + 1);
-        if (a === c.length) {
-            localStorage.setItem('constructorAciertos', aci + 1);
-            h += '<p style="color:var(--primary-color); font-weight:bold; font-size:1.1rem;">{{ t.constructor_perfecto }}</p>';
-            mostrarToast('¡Cita perfecta!', 'success');
-        } else {
-            h += '<p style="color:var(--text-muted);">' + a + ' / ' + c.length + ' correctas</p>';
-        }
-        document.getElementById('resultado-constructor').innerHTML = h;
-        document.getElementById('puntaje-constructor').textContent = localStorage.getItem('constructorAciertos') + ' / ' + localStorage.getItem('constructorTotal');
+    var c = citasJuego[citaActual].piezas;
+    var a = 0;
+    var h = '<p><strong>Resultado:</strong></p><p style="line-height:2;">';
+    for (var i = 0; i < c.length; i++) {
+        var ok = respuestaUsuario[i] === c[i];
+        if (ok) a++;
+        h += '<span style="display:inline-block; margin:2px; padding:4px 8px; border-radius:4px; color:' + (ok ? '#0B1120' : '#fff') + '; background:' + (ok ? 'var(--primary-color)' : 'var(--danger)') + '; font-weight:bold;">' + (respuestaUsuario[i] || '___') + '</span> ';
     }
+    h += '</p>';
+
+    moverCamello(a);
+
+    var tot = parseInt(localStorage.getItem('constructorTotal') || '0');
+    var aci = parseInt(localStorage.getItem('constructorAciertos') || '0');
+    localStorage.setItem('constructorTotal', tot + 1);
+
+    if (a === c.length) {
+        localStorage.setItem('constructorAciertos', aci + 1);
+        sumarMonedas(15);
+        h += '<p style="color:var(--primary-color); font-weight:bold; font-size:1.1rem;">🐪💧 ¡Llegaste al oasis! Cita 100% correcta.</p>';
+        h += '<p style="color:#F5B942; font-weight:700;">🪙 +15 monedas</p>';
+        mostrarToast('¡Llegaste al oasis! +15 monedas', 'success');
+        setTimeout(mostrarBonusCamello, 700);
+    } else {
+        if (a > 0) {
+            sumarMonedas(a * 2);
+            h += '<p style="color:#F5B942;">🪙 +' + (a * 2) + ' monedas por tu esfuerzo</p>';
+        }
+        h += '<p style="color:var(--text-muted);">' + a + ' / ' + c.length + ' correctas — sigue intentando.</p>';
+    }
+    document.getElementById('resultado-constructor').innerHTML = h;
+    document.getElementById('puntaje-constructor').textContent = localStorage.getItem('constructorAciertos') + ' / ' + localStorage.getItem('constructorTotal');
+}
 
     document.getElementById('btnVerificarConstructor').addEventListener('click', verificarConstructor);
     document.getElementById('btnSiguienteConstructor').addEventListener('click', siguienteCitaJuego);
@@ -2560,6 +2626,82 @@ PLANTILLA = r"""
     }
     draw();
 })();
+// ===== SISTEMA DE MONEDAS Y TIENDA =====
+var CATALOGO_ANIMALES = [
+    { id: 'lagartija',      nombre: 'Lagartija del desierto', emoji: '🦎', rareza: 'Común',      costo: 40,  color: '#94a3b8' },
+    { id: 'escarabajo',     nombre: 'Escarabajo pelotero',    emoji: '🪲', rareza: 'Común',      costo: 40,  color: '#94a3b8' },
+    { id: 'vibora',         nombre: 'Víbora cornuda',         emoji: '🐍', rareza: 'Raro',       costo: 150, color: '#3B82F6' },
+    { id: 'camaleon',       nombre: 'Camaleón del Namib',     emoji: '🦎', rareza: 'Raro',       costo: 150, color: '#3B82F6' },
+    { id: 'escorpion',      nombre: 'Escorpión dorado',       emoji: '🦂', rareza: 'Épico',      costo: 400, color: '#a78bfa' },
+    { id: 'varano',         nombre: 'Varano del desierto',    emoji: '🐉', rareza: 'Épico',      costo: 400, color: '#a78bfa' },
+    { id: 'camello-blanco', nombre: 'Camello blanco',         emoji: '🐫', rareza: 'Legendario', costo: 900, color: '#F5B942' },
+    { id: 'zorro-fennec',   nombre: 'Zorro fennec dorado',    emoji: '🦊', rareza: 'Legendario', costo: 900, color: '#F5B942' }
+];
+
+function obtenerMonedas() { return parseInt(localStorage.getItem('userCoins') || '0'); }
+function sumarMonedas(cant) {
+    localStorage.setItem('userCoins', Math.max(0, obtenerMonedas() + cant));
+    actualizarContadorMonedas();
+}
+function actualizarContadorMonedas() {
+    var el = document.getElementById('contador-monedas');
+    if (el) el.textContent = obtenerMonedas();
+}
+function obtenerAnimalesComprados() { return JSON.parse(localStorage.getItem('userAnimales') || '[]'); }
+function obtenerAnimalActivo() {
+    var id = localStorage.getItem('animalActivo');
+    var animal = CATALOGO_ANIMALES.find(function(a) { return a.id === id; });
+    return animal ? animal.emoji : '🐪';
+}
+function comprarAnimal(id) {
+    var animal = CATALOGO_ANIMALES.find(function(a) { return a.id === id; });
+    if (!animal) return;
+    var comprados = obtenerAnimalesComprados();
+    if (comprados.indexOf(id) !== -1) { mostrarToast('Ya tienes este animal.', 'warning'); return; }
+    if (obtenerMonedas() < animal.costo) { mostrarToast('Te faltan monedas. Completa más citas.', 'warning'); return; }
+    sumarMonedas(-animal.costo);
+    comprados.push(id);
+    localStorage.setItem('userAnimales', JSON.stringify(comprados));
+    mostrarToast('¡Adoptaste a ' + animal.nombre + '!', 'success');
+    renderizarTienda();
+}
+function usarAnimal(id) {
+    localStorage.setItem('animalActivo', id);
+    mostrarToast('Ahora tu guía por el desierto es este animal.', 'success');
+    renderizarTienda();
+}
+function renderizarTienda() {
+    var grid = document.getElementById('grid-tienda');
+    if (!grid) return;
+    var comprados = obtenerAnimalesComprados();
+    var activo = localStorage.getItem('animalActivo');
+    grid.innerHTML = '';
+    CATALOGO_ANIMALES.forEach(function(a) {
+        var poseido = comprados.indexOf(a.id) !== -1;
+        var esActivo = activo === a.id;
+        var div = document.createElement('div');
+        div.className = 'tarjeta';
+        div.style.textAlign = 'center';
+        var accionHtml = poseido
+            ? '<button type="button" class="accion usar-animal-btn" data-id="' + a.id + '" style="width:100%; justify-content:center; background:' + (esActivo ? 'var(--primary-color)' : '#334155') + '; color:' + (esActivo ? '#0B1120' : '#fff') + ';">' + (esActivo ? '✓ Guía activo' : 'Usar como guía') + '</button>'
+            : '<button type="button" class="accion comprar-animal-btn" data-id="' + a.id + '" style="width:100%; justify-content:center;">🪙 ' + a.costo + '</button>';
+        div.innerHTML =
+            '<div style="font-size:48px; margin-bottom:8px;" aria-hidden="true">' + a.emoji + '</div>' +
+            '<p style="font-weight:700; color:#fff; margin:0 0 4px 0;">' + a.nombre + '</p>' +
+            '<span style="display:inline-block; font-size:11px; font-weight:bold; padding:3px 10px; border-radius:12px; margin-bottom:10px; color:' + a.color + '; border:1px solid ' + a.color + '55; background:' + a.color + '18;">' + a.rareza + '</span><br>' +
+            accionHtml;
+        grid.appendChild(div);
+    });
+}
+
+// Listeners de compra y uso de animales
+document.addEventListener('click', function(e) {
+    var btnComprar = e.target.closest ? e.target.closest('.comprar-animal-btn') : null;
+    if (btnComprar) comprarAnimal(btnComprar.getAttribute('data-id'));
+    var btnUsar = e.target.closest ? e.target.closest('.usar-animal-btn') : null;
+    if (btnUsar) usarAnimal(btnUsar.getAttribute('data-id'));
+});
+actualizarContadorMonedas();
     </script>
 </body>
 </html>
