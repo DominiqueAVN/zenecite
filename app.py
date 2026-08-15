@@ -127,8 +127,8 @@ def agregar_cabeceras_seguridad(resp):
         f"script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net; "
         f"style-src 'self' 'unsafe-inline'; "  # el CSS embebido queda igual por ahora
         f"img-src 'self' data: https:; "
-        f"frame-src 'self' https://docs.google.com; "
-        f"connect-src 'self' https: https://*.supabase.co; "
+        f"frame-src 'self' https://docs.google.com https://accounts.google.com https://*.supabase.co; "
+        f"connect-src 'self' https: https://*.supabase.co https://accounts.google.com; "
         f"object-src 'none'; "
         f"base-uri 'self';"
     )
@@ -916,10 +916,8 @@ SPLASH_ZENECITE = r"""
         ZENECITE
     </div>
     <ul class="nav-links">
-        <li><a href="#features">Funciones</a></li>
-        <li><a href="/app?idioma=es">Verificador</a></li>
-        <li><a href="/app#tab-tienda">Tienda</a></li>
-    </ul>
+    <li><a href="#quienes-somos">Quiénes somos</a></li>
+</ul>
     <a href="/login" class="nav-cta">Entrar / Registrarme</a>
 </nav>
 
@@ -937,7 +935,15 @@ SPLASH_ZENECITE = r"""
             <canvas id="mesh-hero" aria-hidden="true"></canvas>
         </div>
     </section>
-
+    <section id="quienes-somos" style="max-width:900px; margin:0 auto; padding:60px 50px; text-align:center;">
+    <h2 style="font-size:2rem; margin-bottom:20px; color:#fff;">¿Por qué importa citar bien?</h2>
+    <p style="color:#94a3b8; font-size:1.1rem; line-height:1.8; margin-bottom:20px;">
+        El Burj Khalifa, el edificio más alto del mundo, no se sostiene por casualidad: cada cálculo, cada fuente estructural, cada dato de ingeniería que lo hizo posible fue verificado antes de construir sobre él. Una cita mal hecha es como construir un piso sin comprobar los planos del anterior — puede parecer que sostiene, hasta que no lo hace.
+    </p>
+    <p style="color:#94a3b8; font-size:1.1rem; line-height:1.8;">
+        ZENECITE existe para que no construyas tu conocimiento sobre bases que nadie verificó. Cada fuente que confirmamos es un piso firme más en tu propio edificio de ideas.
+    </p>
+</section>
     <section class="features" id="features">
         <div class="feature-card">
             <span class="emoji-icon" aria-hidden="true">🔍</span>
@@ -962,46 +968,54 @@ SPLASH_ZENECITE = r"""
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     var canvas = document.getElementById('mesh-hero');
     var ctx = canvas.getContext('2d');
-    function resize() {
-        var r = canvas.getBoundingClientRect();
-        canvas.width = r.width; canvas.height = r.height;
-    }
+    function resize() { var r = canvas.getBoundingClientRect(); canvas.width = r.width; canvas.height = r.height; }
     resize();
     window.addEventListener('resize', resize);
-    var nodos = [];
-    for (var i = 0; i < 28; i++) {
-        nodos.push({
+
+    var FORMA = [
+        [0.3,0.2],[0.35,0.15],[0.4,0.25],[0.32,0.3],[0.25,0.35],[0.28,0.45],
+        [0.35,0.5],[0.45,0.48],[0.5,0.55],[0.6,0.6],[0.55,0.4],[0.5,0.3],
+        [0.42,0.22],[0.38,0.18],[0.33,0.22],[0.3,0.28],[0.36,0.32],
+        [0.65,0.45],[0.7,0.5],[0.75,0.42],[0.68,0.38]
+    ];
+    var nodos = FORMA.map(function(p) {
+        return {
+            tx: p[0] * canvas.width, ty: p[1] * canvas.height,
             x: Math.random() * canvas.width, y: Math.random() * canvas.height,
-            vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
-            color: Math.random() > 0.5 ? '245,185,66' : '52,216,216',
-            r: 2 + Math.random() * 2
-        });
-    }
+            color: Math.random() > 0.5 ? '245,185,66' : '52,216,216'
+        };
+    });
+    var mouseX = -1000, mouseY = -1000;
+    canvas.addEventListener('mousemove', function(e) {
+        var r = canvas.getBoundingClientRect();
+        mouseX = e.clientX - r.left; mouseY = e.clientY - r.top;
+    });
+    canvas.addEventListener('mouseleave', function() { mouseX = -1000; mouseY = -1000; });
+
     function loop() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         nodos.forEach(function(n) {
-            n.x += n.vx; n.y += n.vy;
-            if (n.x < 0 || n.x > canvas.width) n.vx *= -1;
-            if (n.y < 0 || n.y > canvas.height) n.vy *= -1;
+            var dx = mouseX - n.x, dy = mouseY - n.y;
+            var dist = Math.hypot(dx, dy);
+            if (dist < 100) {
+                n.x -= dx * 0.05; n.y -= dy * 0.05;
+            } else {
+                n.x += (n.tx - n.x) * 0.05; n.y += (n.ty - n.y) * 0.05;
+            }
         });
         for (var i = 0; i < nodos.length; i++) {
             for (var j = i + 1; j < nodos.length; j++) {
                 var d = Math.hypot(nodos[i].x - nodos[j].x, nodos[i].y - nodos[j].y);
-                if (d < 130) {
-                    ctx.strokeStyle = 'rgba(' + nodos[i].color + ',' + (0.22 * (1 - d / 130)) + ')';
+                if (d < 90) {
+                    ctx.strokeStyle = 'rgba(' + nodos[i].color + ',' + (0.3 * (1 - d / 90)) + ')';
                     ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.moveTo(nodos[i].x, nodos[i].y);
-                    ctx.lineTo(nodos[j].x, nodos[j].y);
-                    ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(nodos[i].x, nodos[i].y); ctx.lineTo(nodos[j].x, nodos[j].y); ctx.stroke();
                 }
             }
         }
         nodos.forEach(function(n) {
-            ctx.beginPath();
-            ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(' + n.color + ',0.9)';
-            ctx.fill();
+            ctx.beginPath(); ctx.arc(n.x, n.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(' + n.color + ',0.9)'; ctx.fill();
         });
         requestAnimationFrame(loop);
     }
@@ -1031,7 +1045,7 @@ PLANTILLA = r"""
             --sidebar-bg: rgba(11, 17, 32, 0.98);
             --danger: #EF4444;
             --warning: #F59E0B;
-            --info: #3B82F6;
+            --info: #1a1a1a;
         }
         * { box-sizing: border-box; }
         body {
@@ -1071,7 +1085,7 @@ PLANTILLA = r"""
 }
 .orbe-cian {
     width: 380px; height: 380px;
-    background: radial-gradient(circle, rgba(52,216,216,0.16) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(40,40,45,0.4) 0%, transparent 70%);
     bottom: -120px; left: -120px;
     animation-delay: 3s;
 }
@@ -3036,16 +3050,31 @@ LOGIN_TEMPLATE = r"""
         <p class="subt">Guarda tu bibliografía y tu progreso en el desierto</p>
 
         <form id="form-login">
-            <label for="email-login">Correo</label>
-            <input type="email" id="email-login" required autocomplete="email">
-            <label for="pass-login">Contraseña</label>
-            <input type="password" id="pass-login" required autocomplete="current-password" minlength="6">
-            <button type="submit" class="btn-login">Ingresar</button>
-        </form>
-        <button type="button" class="btn-secundario" id="btn-registrar">Crear cuenta nueva</button>
+    <label for="email-login">Correo</label>
+    <input type="email" id="email-login" required autocomplete="email">
+    <label for="pass-login">Contraseña</label>
+    <input type="password" id="pass-login" required autocomplete="current-password" minlength="6">
+    <button type="submit" class="btn-login">Ingresar</button>
+</form>
 
-        <div id="mensaje-login" role="status" aria-live="polite"></div>
-        <a href="/app" class="link-volver">Continuar sin cuenta →</a>
+<div id="panel-registro" style="display:none;">
+    <label for="username-registro">Nombre de usuario</label>
+    <input type="text" id="username-registro" minlength="3" maxlength="20">
+    <label for="email-registro">Correo</label>
+    <input type="email" id="email-registro" required>
+    <label for="pass-registro">Contraseña</label>
+    <input type="password" id="pass-registro" required minlength="6">
+    <button type="button" class="btn-login" id="btn-confirmar-registro">Crear cuenta</button>
+</div>
+<button type="button" class="btn-secundario" id="btn-registrar">Crear cuenta nueva</button>
+
+<div style="display:flex; gap:10px; margin-top:16px;">
+    <button type="button" class="btn-secundario" id="btn-google">Google</button>
+    <button type="button" class="btn-secundario" id="btn-github">GitHub</button>
+</div>
+
+<div id="mensaje-login" role="status" aria-live="polite"></div>
+<a href="/app" class="link-volver">Continuar sin cuenta →</a>
     </main>
 </div>
 
@@ -3132,19 +3161,33 @@ inicializarSesion();
     });
 
     document.getElementById('btn-registrar').addEventListener('click', function() {
-        var email = document.getElementById('email-login').value.trim();
-        var pass = document.getElementById('pass-login').value;
-        if (!email || pass.length < 6) {
-            mostrarMensaje('Escribe tu correo y una contraseña de al menos 6 caracteres.', 'error');
-            return;
-        }
-        mostrarMensaje('Creando cuenta...', '');
-        supabaseClient.auth.signUp({ email: email, password: pass })
-            .then(function(res) {
-                if (res.error) { mostrarMensaje(res.error.message, 'error'); return; }
-                mostrarMensaje('Cuenta creada. Ya puedes ingresar.', 'exito');
-            });
-    });
+    document.getElementById('panel-registro').style.display = 'block';
+});
+
+document.getElementById('btn-confirmar-registro').addEventListener('click', async function() {
+    var username = document.getElementById('username-registro').value.trim();
+    var email = document.getElementById('email-registro').value.trim();
+    var pass = document.getElementById('pass-registro').value;
+    if (username.length < 3) { mostrarMensaje('El nombre de usuario necesita al menos 3 caracteres.', 'error'); return; }
+
+    var existente = await supabaseClient.from('perfiles').select('nombre_usuario').eq('nombre_usuario', username).maybeSingle();
+    if (existente.data) { mostrarMensaje('Ese nombre de usuario ya existe. Elige otro.', 'error'); return; }
+
+    mostrarMensaje('Creando cuenta...', '');
+    var res = await supabaseClient.auth.signUp({ email: email, password: pass });
+    if (res.error) { mostrarMensaje(res.error.message, 'error'); return; }
+    if (res.data.user) {
+        await supabaseClient.from('perfiles').insert({ user_id: res.data.user.id, nombre_usuario: username });
+    }
+    mostrarMensaje('Cuenta creada. Revisa tu correo o ingresa directo si la confirmación está desactivada.', 'exito');
+});
+
+document.getElementById('btn-google').addEventListener('click', function() {
+    supabaseClient.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin + '/app' } });
+});
+document.getElementById('btn-github').addEventListener('click', function() {
+    supabaseClient.auth.signInWithOAuth({ provider: 'github', options: { redirectTo: window.location.origin + '/app' } });
+});
 
     supabaseClient.auth.getSession().then(function(res) {
         if (res.data && res.data.session) window.location.href = '/app';
