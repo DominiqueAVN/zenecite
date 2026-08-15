@@ -124,11 +124,11 @@ def agregar_cabeceras_seguridad(resp):
     resp.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     resp.headers["Content-Security-Policy"] = (
         f"default-src 'self'; "
-        f"script-src 'self' 'nonce-{nonce}'; "
+        f"script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net; "
         f"style-src 'self' 'unsafe-inline'; "  # el CSS embebido queda igual por ahora
         f"img-src 'self' data: https:; "
         f"frame-src 'self' https://docs.google.com; "
-        f"connect-src 'self' https:; "
+        f"connect-src 'self' https: https://*.supabase.co; "
         f"object-src 'none'; "
         f"base-uri 'self';"
     )
@@ -989,6 +989,12 @@ SPLASH_ZENECITE = r"""
             .tagline { font-size: 11px; letter-spacing: 4px; }
             .enter-btn { padding: 12px 30px; font-size: 12px; }
         }
+    .brand-icon-wrap img {
+    transition: filter 0.4s ease;
+}
+.brand-icon-wrap:hover img {
+    filter: drop-shadow(0 0 10px rgba(245,158,11,0.6)) drop-shadow(0 0 10px rgba(59,130,246,0.6));
+}
     </style>
 </head>
 <body>
@@ -996,6 +1002,7 @@ SPLASH_ZENECITE = r"""
     <canvas id="particle-canvas" aria-hidden="true"></canvas>
 
     <main id="main-content" class="content-layer">
+        <img src="/static/logo-zenecite.svg" alt="Logo Zenecite" width="120" style="margin-bottom: 20px; filter: drop-shadow(0 0 30px rgba(16,185,129,0.4));">
         <h1 class="brand-name">ZENECITE</h1>
         <p class="tagline">Verificador Académico Global</p>
         <a href="/app" class="enter-btn">Entrar al Verificador →</a>
@@ -1506,7 +1513,9 @@ PLANTILLA = r"""
     <div class="layout-wrapper">
         <aside class="sidebar">
             <div class="brand">
-                <span class="brand-icon-wrap"><span class="icon icon-shield icon-lg" aria-hidden="true"></span></span>
+                <span class="brand-icon-wrap">
+                  <img src="/static/logo-zenecite.svg" alt="" aria-hidden="true" width="28" height="28" style="display:block; filter: drop-shadow(0 0 6px rgba(16,185,129,0.5));">
+                </span>
                 <span class="brand-text">ZENECITE</span>
             </div>
             <nav class="sidebar-nav" aria-label="Navegación principal">
@@ -1713,8 +1722,15 @@ PLANTILLA = r"""
             </div>
         </main>
     </div>
-
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" nonce="{{ csp_nonce }}"></script>
     <script nonce="{{ csp_nonce }}">
+    // === Supabase (persistencia opcional) ===
+    var supabaseClient = (typeof supabase !== 'undefined')
+    ? supabase.createClient(
+        'https://sgifygynovprbpskomkl.supabase.co',
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnaWZ5Z3lub3ZwcmJwc2tvbWtsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3NjE0NTcsImV4cCI6MjEwMjMzNzQ1N30.LmIdeV7N43FBI3Og8ul2VE4pe2NYQTiw8U6l3YhnoSc'
+    )
+    : null;
     // ===== ICONOS SVG con aria-hidden =====
     function iconoSvg(nombre) {
         return '<span class="icon icon-' + nombre + '" aria-hidden="true"></span>';
