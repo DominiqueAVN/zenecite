@@ -1294,18 +1294,31 @@ PLANTILLA = r"""
         textarea::placeholder, input::placeholder { color: var(--text-muted); }
         textarea:focus, input[type="text"]:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15); }
         button.accion {
-            background: var(--primary-color); color: #0B1120; border: none; padding: 12px 28px;
-            border-radius: 10px; font-size: 16px; font-weight: 700; cursor: pointer;
-            transition: all 0.3s ease; display: inline-flex; align-items: center; gap: 8px;
-            position: relative; overflow: hidden;
-        }
-        button.accion::before {
-            content: ""; position: absolute; top: 0; left: -120%; width: 100%; height: 100%;
-            background: linear-gradient(100deg, transparent, rgba(255,255,255,0.35), transparent);
-            transition: left 0.5s ease;
-        }
-        button.accion:hover::before { left: 120%; }
-        button.accion:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(16, 185, 129, 0.35); background: var(--primary-hover); }
+    background: linear-gradient(180deg, #34D399 0%, #10B981 45%, #059669 100%);
+    border: 1px solid rgba(255,255,255,0.25);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.4),
+        inset 0 -2px 4px rgba(0,0,0,0.25),
+        0 2px 6px rgba(0,0,0,0.3);
+    color: #06281c;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.2);
+}
+button.accion:hover {
+    background: linear-gradient(180deg, #4ade80 0%, #10B981 45%, #059669 100%);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.5),
+        inset 0 -2px 4px rgba(0,0,0,0.3),
+        0 6px 16px rgba(16,185,129,0.4);
+}
+button.accion:active {
+    transform: translateY(1px);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.35);
+}
+button[style*="background:#334155"] {
+    background: linear-gradient(180deg, #64748b 0%, #334155 45%, #1e293b 100%) !important;
+    border: 1px solid rgba(255,255,255,0.15);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), inset 0 -2px 4px rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.3);
+}
         .grid-resultados { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; margin-top: 20px; }
         .tarjeta {
             padding: 22px; border-radius: 14px; background: rgba(255,255,255,0.03);
@@ -3001,6 +3014,41 @@ LOGIN_TEMPLATE = r"""
     @media (max-width: 900px) {
         .panel-visual { display:none; }
     }
+.libro-registro {
+    position: relative;
+    min-height: 190px;
+    perspective: 1200px;
+}
+.libro-indicador {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    text-align: center;
+    margin-bottom: 14px;
+    letter-spacing: 1px;
+}
+.pagina-registro {
+    display: none;
+    transform-origin: left center;
+    animation: pasarPagina 0.4s ease;
+}
+.pagina-registro.activa { display: block; }
+@keyframes pasarPagina {
+    0% { transform: rotateY(-15deg); opacity: 0; }
+    100% { transform: rotateY(0deg); opacity: 1; }
+}
+.pagina-ayuda {
+    font-size: 0.82rem;
+    color: #94a3b8;
+    margin: -8px 0 16px 0;
+}
+.pagina-nav {
+    display: flex;
+    gap: 10px;
+}
+.pagina-nav .btn-secundario, .pagina-nav .btn-login { flex: 1; }
+@media (prefers-reduced-motion: reduce) {
+    .pagina-registro { animation: none !important; }
+}
 </style>
 </head>
 <body>
@@ -3058,13 +3106,36 @@ LOGIN_TEMPLATE = r"""
 </form>
 
 <div id="panel-registro" style="display:none;">
-    <label for="username-registro">Nombre de usuario</label>
-    <input type="text" id="username-registro" minlength="3" maxlength="20">
-    <label for="email-registro">Correo</label>
-    <input type="email" id="email-registro" required>
-    <label for="pass-registro">Contraseña</label>
-    <input type="password" id="pass-registro" required minlength="6">
-    <button type="button" class="btn-login" id="btn-confirmar-registro">Crear cuenta</button>
+    <div class="libro-registro">
+        <div class="libro-indicador" id="libro-indicador" aria-live="polite">Página 1 de 3</div>
+
+        <div class="pagina-registro activa" data-pagina="1">
+            <label for="username-registro">Elige tu nombre de usuario</label>
+            <input type="text" id="username-registro" minlength="3" maxlength="20" autocomplete="off">
+            <p class="pagina-ayuda">Así te verán otros exploradores del desierto.</p>
+            <button type="button" class="accion btn-pagina-siguiente" data-de="1">Siguiente página →</button>
+        </div>
+
+        <div class="pagina-registro" data-pagina="2">
+            <label for="email-registro">Tu correo</label>
+            <input type="email" id="email-registro" required autocomplete="email">
+            <p class="pagina-ayuda">Lo usaremos solo para tu cuenta, nada más.</p>
+            <div class="pagina-nav">
+                <button type="button" class="btn-secundario btn-pagina-atras" data-de="2">← Atrás</button>
+                <button type="button" class="accion btn-pagina-siguiente" data-de="2">Siguiente página →</button>
+            </div>
+        </div>
+
+        <div class="pagina-registro" data-pagina="3">
+            <label for="pass-registro">Crea tu contraseña</label>
+            <input type="password" id="pass-registro" required minlength="6" autocomplete="new-password">
+            <p class="pagina-ayuda">Mínimo 6 caracteres.</p>
+            <div class="pagina-nav">
+                <button type="button" class="btn-secundario btn-pagina-atras" data-de="3">← Atrás</button>
+                <button type="button" class="btn-login" id="btn-confirmar-registro">Crear cuenta</button>
+            </div>
+        </div>
+    </div>
 </div>
 <button type="button" class="btn-secundario" id="btn-registrar">Crear cuenta nueva</button>
 
@@ -3164,14 +3235,44 @@ inicializarSesion();
     document.getElementById('panel-registro').style.display = 'block';
 });
 
+function irAPagina(n) {
+    document.querySelectorAll('.pagina-registro').forEach(function(p) {
+        p.classList.toggle('activa', p.dataset.pagina === String(n));
+    });
+    document.getElementById('libro-indicador').textContent = 'Página ' + n + ' de 3';
+}
+
+document.querySelectorAll('.btn-pagina-siguiente').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+        var de = btn.getAttribute('data-de');
+        if (de === '1') {
+            var username = document.getElementById('username-registro').value.trim();
+            if (username.length < 3) { mostrarMensaje('El nombre de usuario necesita al menos 3 caracteres.', 'error'); return; }
+            mostrarMensaje('Revisando disponibilidad...', '');
+            var existente = await supabaseClient.from('perfiles').select('nombre_usuario').eq('nombre_usuario', username).maybeSingle();
+            if (existente.data) { mostrarMensaje('Ese nombre de usuario ya existe. Elige otro.', 'error'); return; }
+            mostrarMensaje('', '');
+            irAPagina(2);
+        } else if (de === '2') {
+            var email = document.getElementById('email-registro').value.trim();
+            if (!email || email.indexOf('@') === -1) { mostrarMensaje('Ingresa un correo válido.', 'error'); return; }
+            irAPagina(3);
+        }
+    });
+});
+
+document.querySelectorAll('.btn-pagina-atras').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var de = parseInt(btn.getAttribute('data-de'));
+        irAPagina(de - 1);
+    });
+});
+
 document.getElementById('btn-confirmar-registro').addEventListener('click', async function() {
     var username = document.getElementById('username-registro').value.trim();
     var email = document.getElementById('email-registro').value.trim();
     var pass = document.getElementById('pass-registro').value;
-    if (username.length < 3) { mostrarMensaje('El nombre de usuario necesita al menos 3 caracteres.', 'error'); return; }
-
-    var existente = await supabaseClient.from('perfiles').select('nombre_usuario').eq('nombre_usuario', username).maybeSingle();
-    if (existente.data) { mostrarMensaje('Ese nombre de usuario ya existe. Elige otro.', 'error'); return; }
+    if (pass.length < 6) { mostrarMensaje('La contraseña necesita al menos 6 caracteres.', 'error'); return; }
 
     mostrarMensaje('Creando cuenta...', '');
     var res = await supabaseClient.auth.signUp({ email: email, password: pass });
