@@ -1735,11 +1735,15 @@ button[style*="background:#334155"] {
             </div>
             <div id="nivel-display" style="font-weight:700; color:var(--primary-color);"></div>
         </div>
-
+        <div id="etiqueta-formato" style="display:inline-block; margin-bottom:12px; font-size:12px; font-weight:700; padding:5px 14px; border-radius:20px; background:rgba(16,185,129,0.15); color:var(--primary-color); border:1px solid rgba(16,185,129,0.3);"></div>
         <p><strong>{{ t.constructor_pool }}</strong></p>
         <div id="piezas-pool" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--border-light); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(0,0,0,0.2);" role="group" aria-label="Piezas disponibles"></div>
         <p><strong>{{ t.constructor_zona }}</strong></p>
         <div id="zona-respuesta" style="display:flex; flex-wrap:wrap; gap:10px; padding:15px; border:1px dashed var(--primary-color); border-radius:12px; min-height:60px; margin-bottom:20px; background:rgba(16,185,129,0.05);" role="group" aria-label="Tu cita en construcción"></div>
+        <div id="zona-escribir" style="display:none; margin-bottom:20px;">
+    <label for="input-cita-escrita" class="sr-only">Escribe la cita completa</label>
+    <textarea id="input-cita-escrita" rows="4" placeholder="Escribe la cita completa en el formato indicado..." style="margin-bottom:0;"></textarea>
+</div>
         <button type="button" class="accion" id="btnVerificarConstructor">{{ t.constructor_verificar }}</button>
         <button type="button" class="accion" id="btnSiguienteConstructor" style="background:#334155; color:white;">{{ t.constructor_siguiente }}</button>
         <div id="resultado-constructor" style="margin-top:20px;" role="status" aria-live="polite"></div>
@@ -2374,14 +2378,64 @@ button[style*="background:#334155"] {
     }
 
     // ===== CONSTRUCTOR DE CITAS =====
-    var citasJuego = [
-        { piezas: ["García, J. A.", "(2021).", "Efecto de la temperatura en la oxidación de aceites vegetales.", "Revista de Ciencia de los Alimentos,", "15(3),", "45-58."] },
-        { piezas: ["López, M., & Pérez, R.", "(2019).", "Análisis del índice de peróxidos en aceite de oliva.", "Grasas y Aceites,", "70(2),", "112-120."] },
-        { piezas: ["UNESCO.", "(2023).", "Alfabetización mediática e informacional para la era digital.", "Ediciones UNESCO,", "1(1),", "10-25."] },
-        { piezas: ["Smith, J.", "(2022).", "Impacto de la inteligencia artificial en la educación superior.", "Journal of EdTech,", "8(4),", "112-128."] },
-        { piezas: ["Chen, L.", "(2020).", "Desarrollo de vacunas de ARNm frente a pandemias globales.", "Nature Medicine,", "26(5),", "450-460."] },
-        { piezas: ["Torres, A.", "(2018).", "Sostenibilidad y energías renovables en zonas rurales.", "Revista de Ingeniería Ambiental,", "12(1),", "33-41."] }
-    ];
+    var PAPERS_BASE = [
+    {autores:"García, J. A.", anio:"2021", titulo:"Efecto de la temperatura en la oxidación de aceites vegetales", revista:"Revista de Ciencia de los Alimentos", volumen:"15", numero:"3", paginas:"45-58"},
+    {autores:"López, M., & Pérez, R.", anio:"2019", titulo:"Análisis del índice de peróxidos en aceite de oliva", revista:"Grasas y Aceites", volumen:"70", numero:"2", paginas:"112-120"},
+    {autores:"UNESCO", anio:"2023", titulo:"Alfabetización mediática e informacional para la era digital", revista:"Ediciones UNESCO", volumen:"1", numero:"1", paginas:"10-25"},
+    {autores:"Smith, J.", anio:"2022", titulo:"Impacto de la inteligencia artificial en la educación superior", revista:"Journal of EdTech", volumen:"8", numero:"4", paginas:"112-128"},
+    {autores:"Chen, L.", anio:"2020", titulo:"Desarrollo de vacunas de ARNm frente a pandemias globales", revista:"Nature Medicine", volumen:"26", numero:"5", paginas:"450-460"},
+    {autores:"Torres, A.", anio:"2018", titulo:"Sostenibilidad y energías renovables en zonas rurales", revista:"Revista de Ingeniería Ambiental", volumen:"12", numero:"1", paginas:"33-41"},
+    {autores:"Ramírez, S., & Ortiz, D.", anio:"2020", titulo:"Control de calidad en la industria de alimentos deshidratados", revista:"Food Science Journal", volumen:"18", numero:"2", paginas:"77-89"},
+    {autores:"Nakamura, K.", anio:"2021", titulo:"Automatización de procesos en plantas de procesamiento alimentario", revista:"Journal of Food Engineering", volumen:"9", numero:"3", paginas:"200-215"},
+    {autores:"Fernández, P.", anio:"2019", titulo:"Buenas prácticas de manufactura en la industria láctea", revista:"Revista Latinoamericana de Alimentos", volumen:"11", numero:"4", paginas:"55-70"},
+    {autores:"Alvarado, R., & Cruz, M.", anio:"2022", titulo:"Evaluación sensorial de productos deshidratados por aire caliente", revista:"Ciencia y Tecnología Alimentaria", volumen:"14", numero:"1", paginas:"25-38"}
+];
+
+function formatoAPA(p) {
+    return {
+        piezas: [p.autores, "(" + p.anio + ").", p.titulo + ".", p.revista + ",", p.volumen + "(" + p.numero + "),", p.paginas + "."],
+        completa: p.autores + " (" + p.anio + "). " + p.titulo + ". " + p.revista + ", " + p.volumen + "(" + p.numero + "), " + p.paginas + "."
+    };
+}
+function formatoIEEE(p) {
+    return {
+        piezas: [p.autores + ",", '"' + p.titulo + ',"', p.revista + ",", "vol. " + p.volumen + ",", "no. " + p.numero + ",", "pp. " + p.paginas + ",", p.anio + "."],
+        completa: p.autores + ', "' + p.titulo + '," ' + p.revista + ", vol. " + p.volumen + ", no. " + p.numero + ", pp. " + p.paginas + ", " + p.anio + "."
+    };
+}
+function formatoVancouver(p) {
+    return {
+        piezas: [p.autores + ".", p.titulo + ".", p.revista + ".", p.anio + ";", p.volumen + "(" + p.numero + "):", p.paginas + "."],
+        completa: p.autores + ". " + p.titulo + ". " + p.revista + ". " + p.anio + ";" + p.volumen + "(" + p.numero + "):" + p.paginas + "."
+    };
+}
+
+var citasJuego = [];
+[0,1,2].forEach(function(i) { citasJuego.push(Object.assign({tipo:'construir', etiqueta:'APA · Fácil'}, formatoAPA(PAPERS_BASE[i]))); });
+[3,4,5,6,7].forEach(function(i) { citasJuego.push(Object.assign({tipo:'construir', etiqueta:'IEEE · Intermedio'}, formatoIEEE(PAPERS_BASE[i]))); });
+[8,9,0,1,2,3,4].forEach(function(i) { citasJuego.push(Object.assign({tipo:'construir', etiqueta:'Vancouver · Difícil'}, formatoVancouver(PAPERS_BASE[i]))); });
+[5,6,7].forEach(function(i) { citasJuego.push(Object.assign({tipo:'escribir', etiqueta:'APA · Imposible (escríbela tú)'}, formatoAPA(PAPERS_BASE[i]))); });
+function similitudTexto(a, b) {
+    a = a.trim().toLowerCase().replace(/\s+/g, ' ');
+    b = b.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!a || !b) return 0;
+    var costos = [];
+    for (var i = 0; i <= a.length; i++) {
+        var ultimo = i;
+        for (var j = 0; j <= b.length; j++) {
+            if (i === 0) { costos[j] = j; }
+            else if (j > 0) {
+                var actual = costos[j - 1];
+                if (a[i - 1] !== b[j - 1]) actual = Math.min(actual, ultimo, costos[j]) + 1;
+                costos[j - 1] = ultimo;
+                ultimo = actual;
+            }
+        }
+        if (i > 0) costos[b.length] = ultimo;
+    }
+    var maxLen = Math.max(a.length, b.length);
+    return maxLen === 0 ? 1 : 1 - costos[b.length] / maxLen;
+}
     var citaActual = 0;
     var piezasDisponibles = [];
     var respuestaUsuario = [];
@@ -2786,8 +2840,8 @@ function gameOver() {
 function cargarCitaJuego(i) {
     citaActual = i;
     respuestaUsuario = [];
-    piezasDisponibles = barajar(citasJuego[i].piezas);
-    dibujarJuego();
+    var citaData = citasJuego[i];
+    document.getElementById('etiqueta-formato').textContent = citaData.etiqueta;
     document.getElementById('resultado-constructor').innerHTML = '';
     document.getElementById('bonus-camello').style.display = 'none';
     document.getElementById('camello-sprite').innerHTML = obtenerAnimalActivo();
@@ -2795,6 +2849,19 @@ function cargarCitaJuego(i) {
     actualizarNivelDisplay();
     moverCamello(0);
     iniciarTemporizador();
+
+    if (citaData.tipo === 'escribir') {
+        document.getElementById('piezas-pool').style.display = 'none';
+        document.getElementById('zona-respuesta').style.display = 'none';
+        document.getElementById('zona-escribir').style.display = 'block';
+        document.getElementById('input-cita-escrita').value = '';
+    } else {
+        document.getElementById('piezas-pool').style.display = 'flex';
+        document.getElementById('zona-respuesta').style.display = 'flex';
+        document.getElementById('zona-escribir').style.display = 'none';
+        piezasDisponibles = barajar(citaData.piezas);
+        dibujarJuego();
+    }
 }
 
 function moverCamello(pasosCompletados) {
@@ -2810,13 +2877,24 @@ function moverCamello(pasosCompletados) {
 function siguienteCitaJuego() { cargarCitaJuego((citaActual + 1) % citasJuego.length); }
 
 function verificarConstructor() {
-    var c = citasJuego[citaActual].piezas;
-    var a = 0;
-    for (var i = 0; i < c.length; i++) { if (respuestaUsuario[i] === c[i]) a++; }
+    var citaData = citasJuego[citaActual];
+    var a, total;
 
-    if (a === c.length) {
+    if (citaData.tipo === 'escribir') {
+        var escrito = document.getElementById('input-cita-escrita').value;
+        var sim = similitudTexto(escrito, citaData.completa);
+        total = 1;
+        a = sim >= 0.85 ? 1 : 0;
+    } else {
+        var c = citaData.piezas;
+        total = c.length;
+        a = 0;
+        for (var i = 0; i < c.length; i++) { if (respuestaUsuario[i] === c[i]) a++; }
+    }
+
+    if (a === total) {
         clearInterval(timerInterval);
-        moverCamello(a);
+        moverCamello(total);
         localStorage.setItem('constructorAciertos', (parseInt(localStorage.getItem('constructorAciertos') || '0')) + 1);
         localStorage.setItem('constructorTotal', (parseInt(localStorage.getItem('constructorTotal') || '0')) + 1);
         var recompensa = 15 + NIVEL_ACTUAL * 3;
@@ -2829,15 +2907,15 @@ function verificarConstructor() {
             mostrarBonusCamello();
             setTimeout(function() { siguienteCitaJuego(); }, 2500);
         }, 700);
-    } else if (a > 0) {
+    } else if (citaData.tipo !== 'escribir' && a > 0) {
         moverCamello(a);
         sumarMonedas(a * 2);
-        mostrarToast(a + '/' + c.length + ' correctas — sigue intentando', 'warning');
+        mostrarToast(a + '/' + total + ' correctas — sigue intentando', 'warning');
         respuestaUsuario = [];
-        piezasDisponibles = barajar(citasJuego[citaActual].piezas);
+        piezasDisponibles = barajar(citaData.piezas);
         dibujarJuego();
     } else {
-        perderVida('Orden incorrecto — retrocede');
+        perderVida(citaData.tipo === 'escribir' ? 'No coincide lo suficiente con la cita real' : 'Orden incorrecto — retrocede');
     }
 }
 
