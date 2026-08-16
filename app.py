@@ -1821,9 +1821,6 @@ PLANTILLA = r"""
         });
     });
 
-    var tabInicial = localStorage.getItem('tabActiva') || '{{ tab_activa }}';
-    mostrarTab(tabInicial);
-
     // ===== MODAL PDF con foco y Escape =====
     var ultimoFoco = null;
 
@@ -2927,6 +2924,9 @@ async function guardarEnNube() {
 inicializarSesion();
 
 actualizarContadorMonedas();
+
+var tabInicial = localStorage.getItem('tabActiva') || '{{ tab_activa }}';
+mostrarTab(tabInicial);
     </script>
 <div id="overlay-desbloqueo" style="display:none; position:fixed; inset:0; z-index:5000; background:rgba(5,10,20,0.92); backdrop-filter:blur(6px); align-items:center; justify-content:center; flex-direction:column; text-align:center;" role="dialog" aria-modal="true" aria-label="Animal desbloqueado">
     <div id="rayos-desbloqueo" aria-hidden="true" style="position:absolute; inset:0; overflow:hidden; pointer-events:none;"></div>
