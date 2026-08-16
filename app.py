@@ -1621,6 +1621,21 @@ button[style*="background:#334155"] {
                         </div>
                         <button type="submit" class="accion" name="accion" value="buscar_todo" id="btn-buscar-submit">{{ t.boton_buscar_todo }}</button>
                     </form>
+                <div style="margin:10px 0 20px;">
+    <button type="button" class="filtro-btn" id="btn-toggle-red" style="display:inline-flex; align-items:center; gap:6px;">
+        <span class="icon icon-grid" aria-hidden="true"></span> Ver como red de conocimiento
+    </button>
+</div>
+
+<div id="red-neuronal-container" style="display:none; position:relative; height:480px; border-radius:16px; overflow:hidden; margin:10px 0 25px; background:radial-gradient(circle at 50% 30%, rgba(16,185,129,0.06), #05080f 70%); border:1px solid var(--border-light);">
+    <canvas id="red-neuronal-canvas" style="width:100%; height:100%; cursor:grab; position:relative; z-index:1;"></canvas>
+    <div id="red-neuronal-tip" style="position:absolute; bottom:12px; left:12px; right:12px; color:#94a3b8; font-size:0.8rem; text-align:center; pointer-events:none; z-index:2;">
+        Haz clic en un nodo para expandir la red · Arrastra para reorganizar
+    </div>
+    <div id="red-neuronal-vacio" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#64748b; font-size:0.9rem; text-align:center; padding:20px; pointer-events:none; z-index:2;">
+        Busca un tema arriba para empezar a construir la red.
+    </div>
+</div>
 
                     <div class="loader-canvas-container" id="loaderContainer">
                         <canvas id="loaderCanvas" aria-hidden="true"></canvas>
@@ -2172,6 +2187,7 @@ button[style*="background:#334155"] {
                     return;
                 }
                 renderizarResultadosBusqueda(data.tema, data.papers);
+                RedNeuronal.buscarEnRed(data.tema, data.papers);
             }).catch(function(err) {
                 console.error('Error en la búsqueda:', err);
                 ocultarLoaderBusqueda();
@@ -2181,7 +2197,272 @@ button[style*="background:#334155"] {
             });
         });
     }
+    var RedNeuronal = (function() {
+    var canvas, ctx, contenedor;
+    var nodos = [], enlaces = [];
+    var animando = false, inicializado = false;
+    var arrastrando = null, posInicioArrastre = null;
+    var offsetArrastre = { x: 0, y: 0 };
+    var idContador = 0;
+    var MAX_NODOS = 140;
+    var datosPendientes = null;
 
+    function init() {
+        if (inicializado) return;
+        canvas = document.getElementById('red-neuronal-canvas');
+        contenedor = document.getElementById('red-neuronal-container');
+        if (!canvas) return;
+        ctx = canvas.getContext('2d');
+        inicializado = true;
+        resize();
+        window.addEventListener('resize', resize);
+        canvas.addEventListener('mousedown', onMouseDown);
+        canvas.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+        canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+        canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+        canvas.addEventListener('touchend', onMouseUp);
+    }
+
+    function resize() {
+        if (!canvas) return;
+        var r = canvas.getBoundingClientRect();
+        canvas.width = r.width || 600;
+        canvas.height = r.height || 480;
+    }
+
+    function limpiar() { nodos = []; enlaces = []; idContador = 0; }
+
+    function colorAleatorio() {
+        var paleta = ['245,185,66', '52,216,216', '16,185,129', '167,139,250', '96,165,250'];
+        return paleta[Math.floor(Math.random() * paleta.length)];
+    }
+
+    function agregarNodoCentro(texto) {
+        limpiar();
+        var n = {
+            id: 'n' + (idContador++), tipo: 'centro', label: texto,
+            x: canvas.width / 2, y: canvas.height / 2, vx: 0, vy: 0,
+            radio: 26, color: '16,185,129', expandido: true, cargando: false
+        };
+        nodos.push(n);
+        document.getElementById('red-neuronal-vacio').style.display = 'none';
+        return n;
+    }
+
+    function agregarNodosHijos(padre, papers) {
+        var angBase = Math.random() * Math.PI * 2;
+        papers.forEach(function(p, idx) {
+            if (nodos.length >= MAX_NODOS) return;
+            var ang = angBase + (idx / papers.length) * Math.PI * 2;
+            var dist = 110 + Math.random() * 40;
+            var n = {
+                id: 'n' + (idContador++), tipo: 'paper', label: (p.titulo || 'Sin título'),
+                paper: p,
+                x: padre.x + Math.cos(ang) * dist, y: padre.y + Math.sin(ang) * dist,
+                vx: 0, vy: 0, radio: 14, color: colorAleatorio(),
+                expandido: false, cargando: false
+            };
+            nodos.push(n);
+            enlaces.push({ a: padre.id, b: n.id });
+        });
+    }
+
+    function obtenerNodo(id) {
+        for (var i = 0; i < nodos.length; i++) if (nodos[i].id === id) return nodos[i];
+        return null;
+    }
+
+    function extraerPalabrasClaveJS(texto) {
+        var stop = ['the','and','for','with','from','into','this','that','are','was','were','de','la','el','los','las','en','del','para','con','por','una','uno','como'];
+        var tokens = (texto || '').toLowerCase().replace(/[^a-záéíóúñ\s]/gi, '').split(/\s+/);
+        var filtrados = tokens.filter(function(t) { return t.length > 3 && stop.indexOf(t) === -1; });
+        return filtrados.slice(0, 5).join(' ');
+    }
+
+    function expandirNodo(n) {
+        if (n.cargando || n.tipo === 'centro') return;
+        if (n.expandido) return;
+        if (nodos.length >= MAX_NODOS) {
+            mostrarToast('La red alcanzó su tamaño máximo — prueba con otra búsqueda.', 'warning');
+            return;
+        }
+        var query = extraerPalabrasClaveJS(n.label);
+        if (!query) return;
+        n.cargando = true;
+        fetch('/api/buscar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'tema=' + encodeURIComponent(query)
+        }).then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        }).then(function(data) {
+            n.cargando = false;
+            n.expandido = true;
+            var papers = (data.papers || []).slice(0, 6);
+            if (!papers.length) { mostrarToast('No se encontraron más fuentes relacionadas.', 'warning'); return; }
+            agregarNodosHijos(n, papers);
+        }).catch(function() {
+            n.cargando = false;
+            mostrarToast('No se pudo expandir la red. Intenta de nuevo.', 'error');
+        });
+    }
+
+    function pasoFisica() {
+        var i, j, n1, n2, dx, dy, dist, fuerza;
+        for (i = 0; i < nodos.length; i++) {
+            n1 = nodos[i];
+            if (n1 === arrastrando) continue;
+            for (j = i + 1; j < nodos.length; j++) {
+                n2 = nodos[j];
+                dx = n1.x - n2.x; dy = n1.y - n2.y;
+                dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                if (dist < 160) {
+                    fuerza = (160 - dist) / dist * 0.6;
+                    var fx = dx * fuerza * 0.02, fy = dy * fuerza * 0.02;
+                    n1.vx += fx; n1.vy += fy;
+                    if (n2 !== arrastrando) { n2.vx -= fx; n2.vy -= fy; }
+                }
+            }
+        }
+        enlaces.forEach(function(e) {
+            var a = obtenerNodo(e.a), b = obtenerNodo(e.b);
+            if (!a || !b) return;
+            var dx = b.x - a.x, dy = b.y - a.y;
+            var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            var fuerza = (dist - 110) * 0.02;
+            var fx = (dx / dist) * fuerza, fy = (dy / dist) * fuerza;
+            if (a !== arrastrando) { a.vx += fx; a.vy += fy; }
+            if (b !== arrastrando) { b.vx -= fx; b.vy -= fy; }
+        });
+        var cx = canvas.width / 2, cy = canvas.height / 2;
+        nodos.forEach(function(n) {
+            if (n === arrastrando) return;
+            n.vx += (cx - n.x) * 0.0006;
+            n.vy += (cy - n.y) * 0.0006;
+            n.vx *= 0.85; n.vy *= 0.85;
+            n.x += n.vx; n.y += n.vy;
+            n.x = Math.max(n.radio, Math.min(canvas.width - n.radio, n.x));
+            n.y = Math.max(n.radio, Math.min(canvas.height - n.radio, n.y));
+        });
+    }
+
+    function dibujar() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        enlaces.forEach(function(e) {
+            var a = obtenerNodo(e.a), b = obtenerNodo(e.b);
+            if (!a || !b) return;
+            ctx.strokeStyle = 'rgba(16,185,129,0.25)';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        });
+        nodos.forEach(function(n) {
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, n.radio, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(' + n.color + ',' + (n.tipo === 'centro' ? 0.9 : 0.75) + ')';
+            ctx.fill();
+            if (n.cargando) {
+                ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+                ctx.lineWidth = 2;
+                var t = (Date.now() / 200) % (Math.PI * 2);
+                ctx.beginPath(); ctx.arc(n.x, n.y, n.radio + 5, t, t + 1.2); ctx.stroke();
+            }
+            if (!n.expandido && n.tipo === 'paper') {
+                ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(n.x, n.y, n.radio + 4, 0, Math.PI * 2); ctx.stroke();
+            }
+            ctx.fillStyle = '#e2e8f0';
+            ctx.font = (n.tipo === 'centro' ? 'bold 12px' : '10px') + ' Segoe UI, sans-serif';
+            ctx.textAlign = 'center';
+            var texto = n.label.length > 22 ? n.label.slice(0, 22) + '…' : n.label;
+            ctx.fillText(texto, n.x, n.y + n.radio + 14);
+        });
+    }
+
+    function bucle() {
+        if (!animando) return;
+        pasoFisica();
+        dibujar();
+        requestAnimationFrame(bucle);
+    }
+    function iniciarBucle() { if (!animando) { animando = true; requestAnimationFrame(bucle); } }
+
+    function nodoEnPosicion(x, y) {
+        for (var i = nodos.length - 1; i >= 0; i--) {
+            var n = nodos[i], dx = x - n.x, dy = y - n.y;
+            if (Math.sqrt(dx * dx + dy * dy) <= n.radio) return n;
+        }
+        return null;
+    }
+    function coordsDesdeEvento(e) {
+        var r = canvas.getBoundingClientRect();
+        var cx = e.touches ? e.touches[0].clientX : e.clientX;
+        var cy = e.touches ? e.touches[0].clientY : e.clientY;
+        return { x: cx - r.left, y: cy - r.top };
+    }
+    function onMouseDown(e) {
+        var pos = coordsDesdeEvento(e);
+        var n = nodoEnPosicion(pos.x, pos.y);
+        if (!n) return;
+        arrastrando = n;
+        posInicioArrastre = pos;
+        offsetArrastre.x = pos.x - n.x;
+        offsetArrastre.y = pos.y - n.y;
+        canvas.style.cursor = 'grabbing';
+    }
+    function onMouseMove(e) {
+        if (!arrastrando) return;
+        var pos = coordsDesdeEvento(e);
+        arrastrando.x = pos.x - offsetArrastre.x;
+        arrastrando.y = pos.y - offsetArrastre.y;
+        arrastrando.vx = 0; arrastrando.vy = 0;
+    }
+    function onMouseUp(e) {
+        if (!arrastrando) return;
+        var n = arrastrando;
+        var posFinal = coordsDesdeEvento(e);
+        var distancia = posInicioArrastre ? Math.hypot(posFinal.x - posInicioArrastre.x, posFinal.y - posInicioArrastre.y) : 999;
+        arrastrando = null;
+        canvas.style.cursor = 'grab';
+        if (distancia < 6) expandirNodo(n);
+    }
+    function onTouchStart(e) { e.preventDefault(); onMouseDown(e); }
+    function onTouchMove(e) { e.preventDefault(); onMouseMove(e); }
+
+    function construirDesdeDatos() {
+        if (!datosPendientes) return;
+        resize();
+        var centro = agregarNodoCentro(datosPendientes.tema);
+        agregarNodosHijos(centro, datosPendientes.papers.slice(0, 8));
+        iniciarBucle();
+    }
+
+    function buscarEnRed(tema, papers) {
+        datosPendientes = { tema: tema, papers: papers };
+        if (inicializado && contenedor && contenedor.style.display === 'block') {
+            construirDesdeDatos();
+        }
+    }
+
+    function mostrar() {
+        init();
+        resize();
+        if (nodos.length === 0) construirDesdeDatos();
+        iniciarBucle();
+    }
+
+    return { init: init, buscarEnRed: buscarEnRed, mostrar: mostrar };
+})();
+
+document.getElementById('btn-toggle-red').addEventListener('click', function() {
+    var cont = document.getElementById('red-neuronal-container');
+    var mostrarAhora = cont.style.display !== 'block';
+    cont.style.display = mostrarAhora ? 'block' : 'none';
+    this.classList.toggle('activo', mostrarAhora);
+    if (mostrarAhora) RedNeuronal.mostrar();
+});
     // Carga inicial de resultados
     (function() {
         var datosEl = document.getElementById('datos-papers');
@@ -2191,6 +2472,7 @@ button[style*="background:#334155"] {
             ocultarLoaderBusqueda();
             if (inicial.papers && inicial.papers.length) {
                 renderizarResultadosBusqueda(inicial.tema, inicial.papers);
+                RedNeuronal.buscarEnRed(inicial.tema, inicial.papers);
             } else {
                 document.getElementById('buscar-sin-resultados').style.display = 'block';
             }
