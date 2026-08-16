@@ -1217,7 +1217,7 @@ PLANTILLA = r"""
             display: flex; flex-direction: column; padding: 25px 15px; z-index: 1000;
         }
         .brand {
-            font-weight: 800; font-size: 1.3rem; color: var(--primary-color);
+            font-weight: 800; font-size: 1.55rem; color: var(--primary-color);
             display: flex; align-items: center; gap: 10px; padding: 0 10px 20px 10px;
             border-bottom: 1px solid var(--border-light); margin-bottom: 20px;
             position: relative;
@@ -1521,8 +1521,8 @@ button[style*="background:#334155"] {
     <div class="layout-wrapper">
         <aside class="sidebar">
             <div class="brand">
-                <span class="brand-icon-wrap" style="width:42px; height:42px; border-radius:50%; background:radial-gradient(circle, rgba(16,185,129,0.18), transparent 70%); display:flex; align-items:center; justify-content:center;">
-  <img src="/static/logo-zenecite.svg" alt="" aria-hidden="true" width="36" height="36" style="display:block; filter: drop-shadow(0 0 8px rgba(16,185,129,0.7)) brightness(1.3);">
+                <span class="brand-icon-wrap" style="width:58px; height:58px; border-radius:50%; background:radial-gradient(circle, rgba(16,185,129,0.22), transparent 70%); display:flex; align-items:center; justify-content:center;">
+  <img src="/static/logo-zenecite.svg" alt="" aria-hidden="true" width="48" height="48" style="display:block; filter: invert(1) drop-shadow(0 0 10px rgba(16,185,129,0.8));">
 </span>
                 <span class="brand-text">ZENECITE</span>
             </div>
@@ -3040,16 +3040,16 @@ LOGIN_TEMPLATE = r"""
 <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     body {
-        background:#0B1120; min-height:100vh; display:flex;
+        background:#000; min-height:100vh; display:flex;
         font-family:'Segoe UI',sans-serif; color:#e2e8f0;
     }
     .panel-visual {
-        flex:1; position:relative; display:flex; align-items:center; justify-content:center;
-        background:linear-gradient(160deg,#0d1626,#0B1120);
-        overflow:hidden; min-width:320px;
-    }
+    flex:1; position:relative; display:flex; align-items:center; justify-content:center;
+    background:#000;
+    overflow:hidden; min-width:320px;
+}
     #svg-login-visual { width:70%; max-width:420px; position:relative; z-index:2; }
-    #svg-login-visual svg { width:100%; height:100%; animation: flotarSuave 6s ease-in-out infinite; }
+    #svg-login-visual img { animation: flotarSuave 6s ease-in-out infinite; }
     @keyframes flotarSuave {
         0%, 100% { transform: translateY(0) rotate(0deg); }
         50% { transform: translateY(-14px) rotate(1.5deg); }
@@ -3161,49 +3161,55 @@ LOGIN_TEMPLATE = r"""
     gap: 16px; margin-top: 12px;
 }
 .galeria-nav .btn-secundario { padding: 6px 14px; }
+.puzzle-contenedor {
+    position: relative;
+    width: 130px;
+    height: 84px;
+    margin: 0 auto 12px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.03);
+}
+.puzzle-fondo svg { width: 100%; height: 100%; }
+.puzzle-piezas { position: absolute; inset: 0; }
+.puzzle-pieza {
+    position: absolute;
+    width: 33.333%;
+    height: 33.333%;
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+    border: 1px solid rgba(255,255,255,0.08);
+    cursor: pointer;
+    padding: 0;
+    transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.puzzle-pieza:hover { background: linear-gradient(135deg, #334155, #1e293b); }
+.puzzle-pieza.revelada { opacity: 0; transform: scale(0.6); pointer-events: none; }
+.puzzle-pista { color: #94a3b8; font-size: 0.8rem; margin: 0 0 4px 0; }
+.oculto { display: none !important; }
+.puzzle-cta {
+    display: inline-block;
+    margin-top: 10px;
+    color: var(--primary-color);
+    font-weight: 700;
+    font-size: 0.85rem;
+    text-decoration: none;
+}
+.puzzle-cta:hover { text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) {
+    .puzzle-pieza { transition: none; }
+}
 </style>
 </head>
 <body>
 <div class="panel-visual">
-    <div id="svg-login-visual" aria-hidden="true">
-        <svg viewBox="0 0 200 160" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-                <linearGradient id="ff1" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stop-color="#1a3444"/>
-                    <stop offset="100%" stop-color="#0e2028"/>
-                </linearGradient>
-                <radialGradient id="gg" cx="50%" cy="50%" r="50%">
-                    <stop offset="0%" stop-color="#F5B942" stop-opacity="1"/>
-                    <stop offset="100%" stop-color="#F5B942" stop-opacity="0"/>
-                </radialGradient>
-                <radialGradient id="gc" cx="50%" cy="50%" r="50%">
-                    <stop offset="0%" stop-color="#34D8D8" stop-opacity="1"/>
-                    <stop offset="100%" stop-color="#34D8D8" stop-opacity="0"/>
-                </radialGradient>
-            </defs>
-            <g stroke="#10B981" stroke-width="0.6" stroke-linejoin="round">
-                <polygon points="70,120 95,70 120,80 110,125" fill="url(#ff1)"/>
-                <polygon points="95,70 120,80 130,55 105,45" fill="#1e4356"/>
-                <polygon points="120,80 110,125 145,130 150,90" fill="#163342"/>
-                <polygon points="130,55 105,45 115,20 145,25" fill="#255064"/>
-                <polygon points="150,90 145,130 175,120 170,80" fill="#0e2028"/>
-                <polygon points="145,25 115,20 130,5 160,10" fill="#2c5c72"/>
-                <polygon points="170,80 145,25 160,10 185,45" fill="#1e4356"/>
-                <polygon points="70,120 60,140 85,145 95,70" fill="#163342"/>
-                <polygon points="60,140 40,138 55,110 70,120" fill="#0e2028"/>
-                <polygon points="55,110 40,138 25,120 45,95" fill="#1e4356"/>
-                <polygon points="45,95 25,120 15,95 35,80" fill="#163342"/>
-                <polygon points="35,80 15,95 20,72 40,68" fill="#255064"/>
-                <polygon points="40,68 20,72 30,52 48,55" fill="#1e4356"/>
-            </g>
-            <circle cx="150" cy="90" r="10" fill="url(#gg)"/><circle cx="150" cy="90" r="2.5" fill="#F5B942"/>
-            <circle cx="35" cy="80" r="8" fill="url(#gc)"/><circle cx="35" cy="80" r="2" fill="#34D8D8"/>
-            <circle cx="115" cy="20" r="6" fill="url(#gg)"/><circle cx="115" cy="20" r="1.6" fill="#F5B942"/>
-            <circle cx="20" cy="72" r="6" fill="url(#gc)"/><circle cx="20" cy="72" r="1.6" fill="#34D8D8"/>
-        </svg>
+    <div id="svg-login-visual" aria-hidden="true" style="text-align:center;">
+        <img src="/static/logo-zenecite.svg" alt=""
+             style="width:260px; max-width:65%; filter: invert(1) drop-shadow(0 0 45px rgba(16,185,129,0.45));">
+        <p style="margin-top:24px; color:#94a3b8; font-size:0.95rem; letter-spacing:1px; max-width:320px;">
+            Cita bien. Descubre más. Aprende jugando.
+        </p>
     </div>
 </div>
-
 <div class="panel-formulario">
     <main class="caja-login">
         <h1>Bienvenido de vuelta</h1>
@@ -3263,11 +3269,16 @@ LOGIN_TEMPLATE = r"""
 <div class="galeria-personajes" id="galeria-personajes">
     <p class="galeria-titulo">Conoce a los guías del desierto</p>
     <div class="tarjeta-personaje" id="tarjeta-personaje">
-        <div class="personaje-icono" id="personaje-icono"></div>
-        <p class="personaje-nombre" id="personaje-nombre"></p>
-        <span class="personaje-rareza" id="personaje-rareza"></span>
-        <p class="personaje-bio" id="personaje-bio"></p>
+    <div class="puzzle-contenedor" id="puzzle-contenedor">
+        <div class="puzzle-fondo" id="personaje-icono"></div>
+        <div class="puzzle-piezas" id="puzzle-piezas"></div>
     </div>
+    <p class="puzzle-pista" id="puzzle-pista">Haz clic en las piezas para descubrir al guía</p>
+    <p class="personaje-nombre oculto" id="personaje-nombre"></p>
+    <span class="personaje-rareza oculto" id="personaje-rareza"></span>
+    <p class="personaje-bio oculto" id="personaje-bio"></p>
+    <a href="#" class="puzzle-cta oculto" id="puzzle-cta">Regístrate para conocer a todos los guías →</a>
+</div>
     <div class="galeria-nav">
         <button type="button" class="btn-secundario" id="btn-personaje-atras" aria-label="Personaje anterior">←</button>
         <span id="galeria-contador" style="color:#94a3b8; font-size:0.8rem;"></span>
@@ -3484,15 +3495,54 @@ function mostrarPersonaje(i) {
     rareza.style.border = '1px solid ' + p.color + '55';
     document.getElementById('personaje-bio').textContent = p.bio;
     document.getElementById('galeria-contador').textContent = (i + 1) + ' / ' + BIOGRAFIAS_PERSONAJES.length;
+    generarPuzzle();
+}
+
+function generarPuzzle() {
+    var cont = document.getElementById('puzzle-piezas');
+    cont.innerHTML = '';
+    document.getElementById('personaje-nombre').classList.add('oculto');
+    document.getElementById('personaje-rareza').classList.add('oculto');
+    document.getElementById('personaje-bio').classList.add('oculto');
+    document.getElementById('puzzle-cta').classList.add('oculto');
+    document.getElementById('puzzle-pista').classList.remove('oculto');
+    document.getElementById('puzzle-pista').textContent = 'Haz clic en las piezas para descubrir al guía';
+    for (var i = 0; i < 9; i++) {
+        var pieza = document.createElement('button');
+        pieza.type = 'button';
+        pieza.className = 'puzzle-pieza';
+        pieza.setAttribute('aria-label', 'Revelar pieza del guía');
+        pieza.style.left = ((i % 3) * 33.333) + '%';
+        pieza.style.top = (Math.floor(i / 3) * 33.333) + '%';
+        pieza.addEventListener('click', function() {
+            if (this.classList.contains('revelada')) return;
+            this.classList.add('revelada');
+            verificarPuzzleCompleto();
+        });
+        cont.appendChild(pieza);
+    }
+}
+
+function verificarPuzzleCompleto() {
+    var piezas = document.querySelectorAll('.puzzle-pieza');
+    var reveladas = document.querySelectorAll('.puzzle-pieza.revelada');
+    if (reveladas.length === piezas.length) {
+        document.getElementById('puzzle-pista').classList.add('oculto');
+        document.getElementById('personaje-nombre').classList.remove('oculto');
+        document.getElementById('personaje-rareza').classList.remove('oculto');
+        document.getElementById('personaje-bio').classList.remove('oculto');
+        document.getElementById('puzzle-cta').classList.remove('oculto');
+    }
 }
 
 document.getElementById('btn-personaje-atras').addEventListener('click', function() {
     indicePersonaje = (indicePersonaje - 1 + BIOGRAFIAS_PERSONAJES.length) % BIOGRAFIAS_PERSONAJES.length;
     mostrarPersonaje(indicePersonaje);
 });
-document.getElementById('btn-personaje-siguiente').addEventListener('click', function() {
-    indicePersonaje = (indicePersonaje + 1) % BIOGRAFIAS_PERSONAJES.length;
-    mostrarPersonaje(indicePersonaje);
+document.getElementById('puzzle-cta').addEventListener('click', function(e) {
+    e.preventDefault();
+    document.getElementById('panel-registro').style.display = 'block';
+    document.getElementById('username-registro').focus();
 });
 
 mostrarPersonaje(0);
