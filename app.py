@@ -3049,6 +3049,40 @@ LOGIN_TEMPLATE = r"""
 @media (prefers-reduced-motion: reduce) {
     .pagina-registro { animation: none !important; }
 }
+.galeria-personajes {
+    margin-top: 26px;
+    padding-top: 22px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}
+.galeria-titulo {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    text-align: center;
+    margin-bottom: 12px;
+    letter-spacing: 0.5px;
+}
+.tarjeta-personaje {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 18px;
+    text-align: center;
+    min-height: 150px;
+    transition: opacity 0.25s ease;
+}
+.personaje-icono { width: 50px; height: 50px; margin: 0 auto 10px; }
+.personaje-icono svg { width: 100%; height: 100%; }
+.personaje-nombre { color: #fff; font-weight: 700; margin: 0 0 4px 0; }
+.personaje-rareza {
+    display: inline-block; font-size: 11px; font-weight: bold;
+    padding: 3px 10px; border-radius: 12px; margin-bottom: 10px;
+}
+.personaje-bio { color: #94a3b8; font-size: 0.85rem; line-height: 1.5; margin: 0; }
+.galeria-nav {
+    display: flex; align-items: center; justify-content: center;
+    gap: 16px; margin-top: 12px;
+}
+.galeria-nav .btn-secundario { padding: 6px 14px; }
 </style>
 </head>
 <body>
@@ -3147,6 +3181,20 @@ LOGIN_TEMPLATE = r"""
 <div id="mensaje-login" role="status" aria-live="polite"></div>
 <a href="/app" class="link-volver">Continuar sin cuenta →</a>
     </main>
+</div>
+<div class="galeria-personajes" id="galeria-personajes">
+    <p class="galeria-titulo">Conoce a los guías del desierto</p>
+    <div class="tarjeta-personaje" id="tarjeta-personaje">
+        <div class="personaje-icono" id="personaje-icono"></div>
+        <p class="personaje-nombre" id="personaje-nombre"></p>
+        <span class="personaje-rareza" id="personaje-rareza"></span>
+        <p class="personaje-bio" id="personaje-bio"></p>
+    </div>
+    <div class="galeria-nav">
+        <button type="button" class="btn-secundario" id="btn-personaje-atras" aria-label="Personaje anterior">←</button>
+        <span id="galeria-contador" style="color:#94a3b8; font-size:0.8rem;"></span>
+        <button type="button" class="btn-secundario" id="btn-personaje-siguiente" aria-label="Siguiente personaje">→</button>
+    </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" nonce="{{ csp_nonce }}"></script>
@@ -3293,6 +3341,83 @@ document.getElementById('btn-github').addEventListener('click', function() {
     supabaseClient.auth.getSession().then(function(res) {
         if (res.data && res.data.session) window.location.href = '/app';
     });
+    var ARTE_ANIMALES_LOGIN = {
+    lagartija: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="55" cy="35" rx="30" ry="14" fill="#65a30d"/><ellipse cx="55" cy="35" rx="30" ry="14" fill="none" stroke="#4d7c0f" stroke-width="2"/><path d="M25 35 L5 20" stroke="#4d7c0f" stroke-width="6" stroke-linecap="round"/><circle cx="82" cy="28" r="9" fill="#84cc16"/><circle cx="86" cy="25" r="2" fill="#1a2e05"/><path d="M40 45 L30 55 M50 48 L45 58 M65 48 L68 58 M75 45 L82 55" stroke="#4d7c0f" stroke-width="4" stroke-linecap="round"/></svg>',
+    escarabajo: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="35" rx="26" ry="20" fill="#1e293b"/><path d="M50 15 V55" stroke="#0f172a" stroke-width="2"/><path d="M20 25 L8 15 M20 45 L8 52 M80 25 L92 15 M80 45 L92 52" stroke="#334155" stroke-width="4" stroke-linecap="round"/><circle cx="50" cy="18" r="5" fill="#334155"/></svg>',
+    vibora: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><path d="M10 45 Q30 15 50 40 T90 25" stroke="#f59e0b" stroke-width="14" fill="none" stroke-linecap="round"/><path d="M10 45 Q30 15 50 40 T90 25" stroke="#b45309" stroke-width="14" fill="none" stroke-linecap="round" stroke-dasharray="2 10"/><circle cx="92" cy="23" r="7" fill="#f59e0b"/><circle cx="94" cy="21" r="1.6" fill="#1a1207"/></svg>',
+    camaleon: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><path d="M15 40 Q40 55 70 35 Q85 25 80 15 Q75 25 60 28 Q35 20 25 35 Z" fill="#22c55e"/><circle cx="78" cy="20" r="9" fill="#16a34a"/><circle cx="81" cy="17" r="2.5" fill="#052e16"/></svg>',
+    escorpion: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="45" cy="38" rx="22" ry="12" fill="#d97706"/><path d="M65 32 Q85 20 88 5 Q90 -2 82 4 Q80 12 70 20" stroke="#b45309" stroke-width="6" fill="none" stroke-linecap="round"/><circle cx="83" cy="4" r="4" fill="#d97706"/><path d="M25 30 L8 20 M28 40 L10 45 M60 45 L58 55 M50 45 L48 55" stroke="#b45309" stroke-width="4" stroke-linecap="round"/></svg>',
+    varano: '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="35" rx="35" ry="15" fill="#7c3aed" opacity="0.85"/><ellipse cx="50" cy="35" rx="35" ry="15" fill="none" stroke="#5b21b6" stroke-width="2"/><path d="M18 35 L2 22" stroke="#5b21b6" stroke-width="7" stroke-linecap="round"/><circle cx="82" cy="27" r="10" fill="#8b5cf6"/><path d="M12 46 Q40 60 68 48" stroke="#a78bfa" stroke-width="2" fill="none"/></svg>',
+    'camello-blanco': '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><path d="M20 50 L28 22 Q35 8 45 20 Q52 10 60 22 L68 50 Z" fill="#fef3c7"/><path d="M15 50 L10 30 L20 22 L24 50 Z" fill="#fde68a"/><circle cx="9" cy="26" r="5" fill="#fef3c7"/></svg>',
+    'zorro-fennec': '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="42" rx="28" ry="14" fill="#fbbf24"/><path d="M40 30 L30 5 L45 22 Z" fill="#fbbf24"/><path d="M60 30 L72 5 L58 22 Z" fill="#fbbf24"/><circle cx="70" cy="38" r="10" fill="#fcd34d"/><circle cx="74" cy="35" r="1.6" fill="#1a1207"/><path d="M20 45 Q5 42 8 55" stroke="#fbbf24" stroke-width="6" fill="none" stroke-linecap="round"/></svg>',
+    'pinguino-emperador': '<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="35" rx="22" ry="26" fill="#1e293b"/><ellipse cx="50" cy="42" rx="14" ry="18" fill="#f8fafc"/><path d="M50 20 L58 28 L50 32 Z" fill="#f59e0b"/><ellipse cx="50" cy="16" rx="10" ry="6" fill="#fbbf24"/></svg>'
+};
+
+var BIOGRAFIAS_PERSONAJES = [
+    {
+        id: 'camello-blanco', nombre: 'Camello blanco', rareza: 'Legendario', color: '#F5B942',
+        bio: 'Puede beber hasta 100 litros de agua en 10 minutos y no sudar durante el día — su cuerpo sube de temperatura para no gastar agua enfriándose. Sus pestañas dobles y fosas nasales que se cierran lo protegen de las tormentas de arena.'
+    },
+    {
+        id: 'zorro-fennec', nombre: 'Zorro fennec dorado', rareza: 'Legendario', color: '#F5B942',
+        bio: 'Sus orejas enormes no solo oyen presas bajo la arena: liberan el calor de su cuerpo como un radiador natural. Es el cánido más pequeño del mundo y puede sobrevivir semanas sin beber agua directa.'
+    },
+    {
+        id: 'escorpion', nombre: 'Escorpión dorado', rareza: 'Épico', color: '#a78bfa',
+        bio: 'Bajo luz ultravioleta, su exoesqueleto brilla en verde azulado — un misterio que los científicos aún estudian. Puede bajar su metabolismo tanto que sobrevive más de un año sin comer.'
+    },
+    {
+        id: 'varano', nombre: 'Varano del desierto', rareza: 'Épico', color: '#a78bfa',
+        bio: 'Corre hasta 30 km/h para escapar del calor extremo del suelo, y puede pasar el día entero enterrado en madrigueras que él mismo excava para regular su temperatura.'
+    },
+    {
+        id: 'vibora', nombre: 'Víbora cornuda', rareza: 'Raro', color: '#3B82F6',
+        bio: 'Se desplaza en "movimiento lateral", una especie de salto de lado que deja huellas en forma de J en la arena y minimiza el contacto con el suelo ardiente.'
+    },
+    {
+        id: 'camaleon', nombre: 'Camaleón del Namib', rareza: 'Raro', color: '#3B82F6',
+        bio: 'Cambia de color no solo para camuflarse, sino para regular su temperatura: se oscurece al amanecer para absorber calor y se aclara al mediodía para reflejarlo.'
+    },
+    {
+        id: 'lagartija', nombre: 'Lagartija del desierto', rareza: 'Común', color: '#94a3b8',
+        bio: 'Levanta las patas por turnos sobre la arena caliente, como si bailara, para que ninguna se queme demasiado tiempo tocando el suelo.'
+    },
+    {
+        id: 'escarabajo', nombre: 'Escarabajo pelotero', rareza: 'Común', color: '#94a3b8',
+        bio: 'En el desierto de Namibia, sube dunas al amanecer y hace equilibrio de cabeza para que la neblina se condense en gotas sobre su caparazón y rueden directo a su boca.'
+    },
+    {
+        id: 'pinguino-emperador', nombre: 'Pingüino emperador', rareza: 'Mítico', color: '#67e8f9',
+        bio: 'La Antártida es, técnicamente, el desierto más grande del planeta. El pingüino emperador soporta vientos de -60°C agrupándose en círculo con miles de individuos, turnándose para que todos pasen tiempo en el centro, más cálido.'
+    }
+];
+
+var indicePersonaje = 0;
+
+function mostrarPersonaje(i) {
+    var p = BIOGRAFIAS_PERSONAJES[i];
+    document.getElementById('personaje-icono').innerHTML = ARTE_ANIMALES_LOGIN[p.id] || '';
+    document.getElementById('personaje-icono').style.color = p.color;
+    document.getElementById('personaje-nombre').textContent = p.nombre;
+    var rareza = document.getElementById('personaje-rareza');
+    rareza.textContent = p.rareza;
+    rareza.style.color = p.color;
+    rareza.style.background = p.color + '18';
+    rareza.style.border = '1px solid ' + p.color + '55';
+    document.getElementById('personaje-bio').textContent = p.bio;
+    document.getElementById('galeria-contador').textContent = (i + 1) + ' / ' + BIOGRAFIAS_PERSONAJES.length;
+}
+
+document.getElementById('btn-personaje-atras').addEventListener('click', function() {
+    indicePersonaje = (indicePersonaje - 1 + BIOGRAFIAS_PERSONAJES.length) % BIOGRAFIAS_PERSONAJES.length;
+    mostrarPersonaje(indicePersonaje);
+});
+document.getElementById('btn-personaje-siguiente').addEventListener('click', function() {
+    indicePersonaje = (indicePersonaje + 1) % BIOGRAFIAS_PERSONAJES.length;
+    mostrarPersonaje(indicePersonaje);
+});
+
+mostrarPersonaje(0);
 </script>
 </body>
 </html>
